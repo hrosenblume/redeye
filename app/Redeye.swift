@@ -519,8 +519,9 @@ class StatusBarController: NSObject {
     }
 
     private func displayName(for project: Project) -> String {
-        let index = projects.firstIndex(where: { $0.path == project.path }) ?? 0
-        return String(format: "redeye-ordo-internal-%02d", index)
+        let sameName = projects.filter { $0.name == project.name }
+        let index = sameName.firstIndex(where: { $0.path == project.path }) ?? 0
+        return String(format: "redeye-%@-%02d", project.name.lowercased(), index)
     }
 
     private func runBulkAsync(_ targets: [Project], action: String, includeDir: Bool,
