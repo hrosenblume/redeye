@@ -334,7 +334,9 @@ class StatusBarController: NSObject {
         refreshUI()
 
         let action = wasAlive ? "stop" : "start"
-        runScriptAsync(action, session: project.sessionName, dir: wasAlive ? nil : project.path) { [weak self] in
+        let name = wasAlive ? nil : displayName(for: project)
+        runScriptAsync(action, session: project.sessionName, dir: wasAlive ? nil : project.path,
+                       displayName: name) { [weak self] in
             guard let self = self else { return }
             self.checkStatusAsync(session: project.sessionName) { state in
                 self.sessionStatus[project.sessionName] = state
@@ -516,12 +518,19 @@ class StatusBarController: NSObject {
         return (targets, updated)
     }
 
+    private func displayName(for project: Project) -> String {
+        let index = projects.firstIndex(where: { $0.path == project.path }) ?? 0
+        return String(format: "redeye-ordo-internal-%02d", index)
+    }
+
     private func runBulkAsync(_ targets: [Project], action: String, includeDir: Bool,
                               completion: @escaping () -> Void) {
+        let names = includeDir ? targets.map { displayName(for: $0) } : []
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            for project in targets {
+            for (i, project) in targets.enumerated() {
                 self?.runScript(action, session: project.sessionName,
-                               dir: includeDir ? project.path : nil)
+                               dir: includeDir ? project.path : nil,
+                               displayName: includeDir ? names[i] : nil)
             }
             DispatchQueue.main.async { completion() }
         }
@@ -529,20 +538,22 @@ class StatusBarController: NSObject {
 
     // MARK: - Script Interface
 
-    private func runScript(_ action: String, session: String, dir: String? = nil) {
+    private func runScript(_ action: String, session: String, dir: String? = nil,
+                            displayName: String? = nil) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
         var args = [Config.scriptPath, action, session]
         if let dir = dir { args.append(dir) }
+        if let displayName = displayName { args.append(displayName) }
         task.arguments = args
         try? task.run()
         task.waitUntilExit()
     }
 
     private func runScriptAsync(_ action: String, session: String, dir: String? = nil,
-                                completion: (() -> Void)? = nil) {
+                                displayName: String? = nil, completion: (() -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.runScript(action, session: session, dir: dir)
+            self?.runScript(action, session: session, dir: dir, displayName: displayName)
             DispatchQueue.main.async { completion?() }
         }
     }

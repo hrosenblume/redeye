@@ -1,7 +1,7 @@
 #!/bin/bash
 # Redeye: Claude Code keepalive manager.
 # Uses detached tmux sessions -- no Terminal.app window.
-# Usage: redeye.sh {start|stop|status} <session_name> [project_dir]
+# Usage: redeye.sh {start|stop|status} <session_name> [project_dir] [display_name]
 
 # macOS apps launch with a minimal PATH — add common install locations
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
@@ -25,6 +25,7 @@ fi
 case "$ACTION" in
   start)
     PROJECT_DIR="${3:-}"
+    DISPLAY_NAME="${4:-}"
     if [ -z "$PROJECT_DIR" ]; then
       echo "error: no project directory specified"
       exit 1
@@ -41,8 +42,12 @@ case "$ACTION" in
       echo "already running"
       exit 0
     fi
+    CLAUDE_ARGS=""
+    if [ -n "$DISPLAY_NAME" ]; then
+      CLAUDE_ARGS="--name \"$DISPLAY_NAME\""
+    fi
     "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR" \
-      "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN"
+      "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN $CLAUDE_ARGS"
     echo "started"
     ;;
   stop)
