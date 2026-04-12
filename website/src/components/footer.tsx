@@ -7,7 +7,7 @@ export function Footer() {
           href="https://github.com/hrosenblume"
           className="text-zinc-400 underline hover:text-white"
         >
-          Hunter
+          Hunter Rosenblume
         </a>
       </p>
     </footer>
