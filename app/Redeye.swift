@@ -25,7 +25,10 @@ private enum Config {
     static let searchPaths = "/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
     static let pollInterval: TimeInterval = 30
     static let permissionPollInterval: TimeInterval = 5
-    static let permissionPromptPatterns = ["[Y/n]", "[y/N]", "Allow", "Deny", "approve", "permission"]
+    static let permissionPromptPatterns = [
+        "[Y/n]", "[y/N]", "Allow", "Deny", "approve", "permission",
+        "Would you like to proceed", "auto-accept edits", "manually approve",
+    ]
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)
     static let instructionsTextInset = NSSize(width: 16, height: 16)
@@ -969,14 +972,16 @@ class StatusBarController: NSObject {
         guard let (session, _) = sessionInfo(from: sender) else { return }
         pendingPermissions.removeValue(forKey: session)
         refreshUI()
-        runScriptAsync("send", session: session, dir: "y")
+        // Enter confirms the highlighted/default option in Claude Code prompts
+        runScriptAsync("send", session: session, dir: "Enter")
     }
 
     @objc func denyPermission(_ sender: NSMenuItem) {
         guard let (session, _) = sessionInfo(from: sender) else { return }
         pendingPermissions.removeValue(forKey: session)
         refreshUI()
-        runScriptAsync("send", session: session, dir: "n")
+        // Escape cancels/denies in Claude Code prompts
+        runScriptAsync("send", session: session, dir: "Escape")
     }
 
     @objc func setPermissionMode(_ sender: NSMenuItem) {
