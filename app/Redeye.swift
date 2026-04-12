@@ -6,7 +6,18 @@ private enum Config {
     static let resourcesDir = Bundle.main.bundlePath + "/Contents/Resources"
     static let scriptPath = resourcesDir + "/claude-ordo-keepalive.sh"
     static let instructionsPath = resourcesDir + "/instructions.txt"
-    static let tmuxPath = "/opt/homebrew/bin/tmux"
+    static let tmuxPath: String = {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.arguments = ["-lc", "command -v tmux"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        try? task.run()
+        task.waitUntilExit()
+        let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return path.isEmpty ? "/opt/homebrew/bin/tmux" : path
+    }()
     static let pollInterval: TimeInterval = 30
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)

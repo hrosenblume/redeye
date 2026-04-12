@@ -3,8 +3,8 @@
 # Uses detached tmux sessions -- no Terminal.app window.
 # Usage: redeye.sh {start|stop|status} <session_name> [project_dir]
 
-CLAUDE_BIN="/Users/hrosenblume/.local/bin/claude"
-TMUX_BIN="/opt/homebrew/bin/tmux"
+CLAUDE_BIN="$(command -v claude 2>/dev/null || echo "")"
+TMUX_BIN="$(command -v tmux 2>/dev/null || echo "")"
 
 ACTION="${1:-}"
 SESSION_NAME="${2:-}"
