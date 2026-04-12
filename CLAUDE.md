@@ -8,7 +8,7 @@ Redeye is a macOS menu bar app that keeps Claude Code sessions alive in the back
 
 ## Repo Structure
 
-- `Redeye.app/` — Pre-built app bundle, ready to copy to `/Applications`
+- `Redeye.app.zip` — Pre-built app bundle, unzip and copy to `/Applications`
 - `app/` — Source files (Redeye.swift, Info.plist, shell script, icon, etc.)
 
 ## Build

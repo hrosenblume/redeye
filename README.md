@@ -1,26 +1,32 @@
 # Redeye
 
-A macOS menu bar app that keeps a Claude Code session alive in the background. Like Caffeine, but for Claude.
+Keeps your Claude awake.
+
+A macOS menu bar app that keeps Claude Code sessions alive in the background using `tmux`.
 
 ## What it does
 
-- Runs a headless Claude Code session via `screen` (no Terminal popups)
-- Shows a coffee cup icon in your menu bar -- filled when running, outlined when stopped
-- Click to toggle on/off, attach to the session, or quit
+- Manages multiple project directories, each with its own detached tmux session running `claude` under `caffeinate -is`
+- Shows a coffee cup icon in your menu bar — filled when running, outlined when stopped
+- Start/stop sessions, attach via Terminal, add/remove projects from the menu
 - Auto-starts on login via LaunchAgent
 
-## Building
+## Install
+
+1. Download `Redeye.app.zip` from this repo
+2. Unzip and move `Redeye.app` to `/Applications`
+3. Requires `tmux` (`brew install tmux`) and [Claude Code](https://claude.ai/code)
+
+## Build from source
 
 ```bash
-mkdir -p ~/Applications/Redeye.app/Contents/{MacOS,Resources}
-swiftc -o ~/Applications/Redeye.app/Contents/MacOS/Redeye Redeye.swift -framework AppKit
+mkdir -p Redeye.app/Contents/{MacOS,Resources}
+swiftc -o Redeye.app/Contents/MacOS/Redeye app/Redeye.swift -framework AppKit
+cp app/Info.plist Redeye.app/Contents/
+cp app/Redeye.icns app/instructions.txt app/claude-ordo-keepalive.sh Redeye.app/Contents/Resources/
 ```
 
-## Setup
-
-1. Copy `claude-ordo-keepalive.sh` to `~/.local/bin/` and `chmod +x` it
-2. Build and place `Redeye.app` in `~/Applications/`
-3. Add a LaunchAgent to auto-start on login (see below)
+## Auto-start on login
 
 ```xml
 <!-- ~/Library/LaunchAgents/com.hrosenblume.claude-ordo.plist -->
@@ -32,7 +38,7 @@ swiftc -o ~/Applications/Redeye.app/Contents/MacOS/Redeye Redeye.swift -framewor
     <array>
         <string>/usr/bin/open</string>
         <string>-a</string>
-        <string>/Users/hrosenblume/Applications/Redeye.app</string>
+        <string>/Applications/Redeye.app</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
