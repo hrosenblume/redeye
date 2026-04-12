@@ -2,7 +2,7 @@ export function Hero() {
   return (
     <section className="flex flex-col items-center justify-center px-6 pt-32 pb-20">
       <div className="mb-6 text-6xl">&#9749;</div>
-      <h1 className="max-w-2xl text-center text-5xl font-bold tracking-tight sm:text-6xl">
+      <h1 className="text-center text-5xl font-bold tracking-tight sm:text-6xl">
         Keep your Claude awake
       </h1>
       <p className="mt-6 max-w-xl text-center text-lg leading-8 text-zinc-400">
@@ -10,7 +10,7 @@ export function Hero() {
       </p>
       <div className="mt-10 flex gap-4">
         <a
-          href="https://github.com/hrosenblume/redeye/raw/main/Redeye.app.zip"
+          href="https://github.com/hrosenblume/redeye/releases/latest/download/Redeye.app.zip"
           className="rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition-colors hover:bg-zinc-200"
         >
           Download for Mac
