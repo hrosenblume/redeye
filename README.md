@@ -4,6 +4,8 @@ Keeps your Claude awake.
 
 A macOS menu bar app that keeps Claude Code sessions alive in the background using `tmux`.
 
+**[Website](https://hrosenblume.github.io/redeye/)**
+
 ## What it does
 
 - Manages multiple project directories, each with its own detached tmux session running `claude` under `caffeinate -is`
