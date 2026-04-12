@@ -14,7 +14,7 @@ const steps = [
   },
   {
     label: "Launch",
-    code: "open /Applications/Redeye.app",
+    text: "Double-click Redeye in /Applications",
   },
 ];
 
@@ -47,13 +47,15 @@ export function Install() {
                   </a>
                   , unzip it, and move to /Applications
                 </p>
+              ) : "text" in step ? (
+                <p className="text-zinc-300">{step.text}</p>
               ) : (
                 <>
                   <pre className="overflow-x-auto whitespace-pre text-zinc-300">
                     {step.code}
                   </pre>
                   <button
-                    onClick={() => copy(step.code, i)}
+                    onClick={() => copy(step.code!, i)}
                     className="absolute right-3 top-3 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:text-white"
                   >
                     {copied === i ? "Copied" : "Copy"}
@@ -63,22 +65,6 @@ export function Install() {
             </div>
           </div>
         ))}
-      </div>
-      <div className="mt-8 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-400">
-        <strong className="text-zinc-300">Prerequisites:</strong>{" "}
-        <a
-          href="https://formulae.brew.sh/formula/tmux"
-          className="underline hover:text-white"
-        >
-          tmux
-        </a>{" "}
-        and{" "}
-        <a
-          href="https://claude.ai/code"
-          className="underline hover:text-white"
-        >
-          Claude Code
-        </a>
       </div>
     </section>
   );
