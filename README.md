@@ -51,3 +51,7 @@ cp app/Redeye.icns app/instructions.txt app/claude-ordo-keepalive.sh Redeye.app/
 </dict>
 </plist>
 ```
+
+---
+
+[Learn more on our website](https://hrosenblume.github.io/redeye/)
