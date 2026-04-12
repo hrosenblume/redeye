@@ -28,6 +28,9 @@ private enum Config {
     static let instructionsTextInset = NSSize(width: 16, height: 16)
     static let pathMaxLength = 60
     static let userDefaultsKey = "projects"
+    static let githubReleasesURL = "https://api.github.com/repos/hrosenblume/redeye/releases/latest"
+    static let updateCheckInterval: TimeInterval = 86400
+    static let lastUpdateCheckKey = "lastUpdateCheck"
 }
 
 private enum Icon {
@@ -304,6 +307,81 @@ private class DependencyInstallerController {
     }
 }
 
+// MARK: - Update Checker
+
+private class UpdateChecker {
+    private var latestVersion: String?
+    private var releaseURL: String?
+
+    var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    var updateAvailable: Bool {
+        guard let latest = latestVersion else { return false }
+        return compareVersions(latest, isNewerThan: currentVersion)
+    }
+
+    func checkIfNeeded() {
+        let lastCheck = UserDefaults.standard.double(forKey: Config.lastUpdateCheckKey)
+        if Date().timeIntervalSince1970 - lastCheck < Config.updateCheckInterval { return }
+        check()
+    }
+
+    func check() {
+        guard let url = URL(string: Config.githubReleasesURL) else { return }
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self, let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String,
+                  let htmlURL = json["html_url"] as? String else { return }
+
+            let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Config.lastUpdateCheckKey)
+
+            DispatchQueue.main.async {
+                self.latestVersion = version
+                self.releaseURL = htmlURL
+                if self.updateAvailable {
+                    self.showUpdateAlert(version: version, url: htmlURL)
+                }
+            }
+        }.resume()
+    }
+
+    func showUpdateAlert(version: String, url: String) {
+        let alert = NSAlert()
+        alert.messageText = "Update Available \u{2014} v\(version)"
+        alert.informativeText = "A new version of Redeye is available. You\u{2019}re currently on v\(currentVersion)."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Download Update")
+        alert.addButton(withTitle: "Skip")
+
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            if let releaseURL = URL(string: url) {
+                NSWorkspace.shared.open(releaseURL)
+            }
+        }
+    }
+
+    private func compareVersions(_ a: String, isNewerThan b: String) -> Bool {
+        let partsA = a.split(separator: ".").compactMap { Int($0) }
+        let partsB = b.split(separator: ".").compactMap { Int($0) }
+        for i in 0..<max(partsA.count, partsB.count) {
+            let va = i < partsA.count ? partsA[i] : 0
+            let vb = i < partsB.count ? partsB[i] : 0
+            if va > vb { return true }
+            if va < vb { return false }
+        }
+        return false
+    }
+}
+
 // MARK: - NSMenu Helpers
 
 private extension NSMenu {
@@ -332,6 +410,7 @@ class StatusBarController: NSObject {
     private var instructionsWindow: NSWindow?
     private var depStatus: DependencyStatus?
     private let depInstaller = DependencyInstallerController()
+    private let updateChecker = UpdateChecker()
 
     // MARK: - Project Persistence
 
@@ -407,6 +486,7 @@ class StatusBarController: NSObject {
         } else {
             startEnabledProjects()
         }
+        updateChecker.checkIfNeeded()
     }
 
     // MARK: - UI
@@ -484,6 +564,7 @@ class StatusBarController: NSObject {
         }
 
         menu.addItem(NSMenuItem.separator())
+        menu.addActionItem("Check for Updates\u{2026}", action: #selector(checkForUpdates), target: self)
         menu.addActionItem("Quit Redeye", action: #selector(quitApp), target: self, key: "q")
 
         statusItem.menu = menu
@@ -692,6 +773,10 @@ class StatusBarController: NSObject {
 
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func checkForUpdates() {
+        updateChecker.check()
     }
 
     @objc func quitApp() {

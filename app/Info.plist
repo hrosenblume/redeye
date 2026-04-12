@@ -13,6 +13,8 @@
     <string>APPL</string>
     <key>CFBundleIconFile</key>
     <string>Redeye</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
     <key>LSUIElement</key>
     <true/>
 </dict>
