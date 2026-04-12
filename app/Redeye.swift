@@ -19,7 +19,7 @@ private enum Config {
         return path.isEmpty ? "/opt/homebrew/bin/tmux" : path
     }()
     static let depPollInterval: TimeInterval = 2.0
-    static let depPollTimeout: TimeInterval = 120.0
+    static let depPollTimeout: TimeInterval = 600.0
     static let depCheckDismissedKey = "depCheckDismissed"
     static let searchPaths = "/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
     static let pollInterval: TimeInterval = 30
@@ -162,8 +162,13 @@ private class DependencyInstallerController {
     private var pollTimer: Timer?
     private var pollStartTime: Date?
     private var onComplete: ((Bool) -> Void)?
+    private var isInstalling = false
 
     func checkAndPromptIfNeeded(completion: @escaping (Bool) -> Void) {
+        if isInstalling {
+            completion(true)
+            return
+        }
         let status = DependencyStatus.check()
         if status.allPresent {
             completion(true)
@@ -202,6 +207,10 @@ private class DependencyInstallerController {
     }
 
     private func runInstallInTerminal(status: DependencyStatus, completion: @escaping (Bool) -> Void) {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        isInstalling = true
+
         let script = buildInstallScript(status: status)
         let escaped = script
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -227,16 +236,17 @@ private class DependencyInstallerController {
         if status.allPresent {
             timer.invalidate()
             pollTimer = nil
-            showAlert(title: "All set!", message: "All dependencies are installed. Redeye is ready to go.")
+            isInstalling = false
+            showAlert(title: "All set!",
+                      message: "All dependencies are installed.\n\nNote: You may need to run \"claude\" in Terminal once to set up authentication.")
             onComplete?(true)
             onComplete = nil
         } else if elapsed > Config.depPollTimeout {
             timer.invalidate()
             pollTimer = nil
-            showAlert(title: "Some dependencies are still missing",
-                      message: "Still missing:\n\n"
-                        + status.missingItems.map { "  \u{2022} \($0)" }.joined(separator: "\n")
-                        + "\n\nYou can retry from the Redeye menu later.",
+            isInstalling = false
+            showAlert(title: "Still installing?",
+                      message: "Redeye will detect the tools automatically once they\u{2019}re ready. You can close this and keep using the app.",
                       style: .warning)
             onComplete?(true)
             onComplete = nil
@@ -254,29 +264,43 @@ private class DependencyInstallerController {
     }
 
     private func buildInstallScript(status: DependencyStatus) -> String {
-        var steps = [
+        var sections: [[String]] = []
+
+        sections.append([
             "echo '=== Redeye Dependency Installer ==='",
             "export PATH=\\\"$PATH:\(Config.searchPaths)\\\""
-        ]
+        ])
 
         if !status.hasHomebrew {
-            steps.append("echo '>>> Installing Homebrew...'")
-            steps.append("/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\"")
-            steps.append("eval \\\"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)\\\"")
+            sections.append([
+                "echo '>>> Installing Homebrew...'",
+                "/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\"",
+                "eval \\\"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)\\\""
+            ])
         }
 
         if !status.hasTmux {
-            steps.append("echo '>>> Installing tmux...'")
-            steps.append("brew install tmux")
+            sections.append([
+                "echo '>>> Installing tmux...'",
+                "brew install tmux"
+            ])
         }
 
         if !status.hasClaude {
-            steps.append("echo '>>> Installing Claude Code...'")
-            steps.append("curl -fsSL https://cli.claude.ai/install.sh | sh")
+            sections.append([
+                "echo '>>> Installing Claude Code...'",
+                "curl -fsSL https://cli.claude.ai/install.sh | sh"
+            ])
         }
 
-        steps.append("echo '=== Installation complete! You can close this window. ==='")
-        return steps.joined(separator: " && ")
+        sections.append([
+            "echo ''",
+            "echo '=== Installation complete! ==='",
+            "echo 'Note: Run claude in Terminal to set up authentication.'",
+            "echo 'You can close this window.'"
+        ])
+
+        return sections.map { $0.joined(separator: " && ") }.joined(separator: " ; ")
     }
 }
 
@@ -368,7 +392,9 @@ class StatusBarController: NSObject {
                 guard let self else { return }
                 self.depStatus = DependencyStatus.check()
                 self.refreshUI()
-                self.continueSetup()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.continueSetup()
+                }
             }
         } else {
             continueSetup()
@@ -450,7 +476,11 @@ class StatusBarController: NSObject {
         if let status = depStatus, !status.allPresent {
             menu.addItem(NSMenuItem.separator())
             menu.addDisabledItem("\u{26A0} Missing Dependencies")
-            menu.addActionItem("Install Dependencies\u{2026}", action: #selector(installDependencies), target: self)
+            if UserDefaults.standard.bool(forKey: Config.depCheckDismissedKey) {
+                menu.addActionItem("Check Dependencies\u{2026}", action: #selector(resetAndInstallDependencies), target: self)
+            } else {
+                menu.addActionItem("Install Dependencies\u{2026}", action: #selector(installDependencies), target: self)
+            }
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -590,6 +620,11 @@ class StatusBarController: NSObject {
             self?.depStatus = DependencyStatus.check()
             self?.refreshUI()
         }
+    }
+
+    @objc func resetAndInstallDependencies() {
+        UserDefaults.standard.removeObject(forKey: Config.depCheckDismissedKey)
+        installDependencies()
     }
 
     @objc func startAllProjects() {
@@ -815,6 +850,11 @@ class StatusBarController: NSObject {
     private func startPolling() {
         pollTimer = Timer.scheduledTimer(withTimeInterval: Config.pollInterval, repeats: true) { [weak self] _ in
             self?.refreshAllStatusAsync()
+            let newDepStatus = DependencyStatus.check()
+            if self?.depStatus?.allPresent != newDepStatus.allPresent {
+                self?.depStatus = newDepStatus
+                self?.refreshUI()
+            }
         }
     }
 
