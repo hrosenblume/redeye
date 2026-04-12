@@ -18,9 +18,10 @@ mkdir -p Redeye.app/Contents/{MacOS,Resources}
 swiftc -o Redeye.app/Contents/MacOS/Redeye app/Redeye.swift -framework AppKit
 cp app/Info.plist Redeye.app/Contents/
 cp app/Redeye.icns app/instructions.txt app/claude-ordo-keepalive.sh Redeye.app/Contents/Resources/
+codesign --force --deep -s - Redeye.app
 ```
 
-To install, copy the built `Redeye.app` to `/Applications`.
+To install, copy the built `Redeye.app` to `/Applications`. The ad-hoc signature avoids the "damaged" Gatekeeper error — users get the standard "unidentified developer" prompt instead.
 
 There is no Xcode project, Package.swift, or test suite. The app is a single-file Swift program compiled directly with `swiftc`.
 
