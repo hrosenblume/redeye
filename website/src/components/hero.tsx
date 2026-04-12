@@ -10,10 +10,10 @@ export function Hero() {
       </p>
       <div className="mt-10 flex gap-4">
         <a
-          href="https://github.com/hrosenblume/redeye"
+          href="https://github.com/hrosenblume/redeye/raw/main/Redeye.app.zip"
           className="rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition-colors hover:bg-zinc-200"
         >
-          Download on GitHub
+          Download
         </a>
         <a
           href="#install"
