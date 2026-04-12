@@ -1,0 +1,44 @@
+Getting Started with Redeye
+
+
+What is Redeye?
+
+Redeye keeps Claude Code running in the background on your Mac so you can code from anywhere — your phone, a tablet, or the web.
+
+
+Step 1: Add a project
+
+Click the cup icon in your menu bar, then "Add Folder..." and pick a project directory. Redeye will start a Claude Code session for it automatically.
+
+
+Step 2: Enable remote control
+
+This lets Claude receive prompts from outside the terminal.
+
+  1. Click your project in the menu bar, then "Open Session"
+  2. Type /config in the Claude Code prompt
+  3. Select "Remote Control" and set it to Enabled
+  4. Stop and restart the session from the menu bar
+
+This is a one-time setup — it applies to all projects.
+
+
+Step 3: Code from anywhere
+
+  1. Open claude.ai or the Claude app on your phone
+  2. Go to Claude Code (sidebar on web, bottom nav on mobile)
+  3. Tap an active session to connect
+  4. Start prompting — Claude edits your code on your Mac in real time
+
+Your Mac needs to stay awake and online. Redeye uses caffeinate to prevent sleep while sessions are running.
+
+
+Quick reference
+
+  ● Green dot          Session is running
+  ● "session open"     Session is attached in Terminal
+  ○ Empty dot          Session is stopped
+  ⚠ Warning            Project folder not found
+
+  ☕ Filled cup          At least one session is active
+  ☕ Empty cup           All sessions are stopped
