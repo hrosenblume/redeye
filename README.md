@@ -15,7 +15,10 @@ A macOS menu bar app that keeps Claude Code sessions alive in the background usi
 
 1. Download `Redeye.app.zip` from this repo
 2. Unzip and move `Redeye.app` to `/Applications`
-3. On first launch, macOS will say it's from an "unidentified developer" — go to **System Settings > Privacy & Security** and click **Open Anyway**
+3. Remove the quarantine flag:
+   ```bash
+   xattr -cr /Applications/Redeye.app
+   ```
 4. Requires `tmux` (`brew install tmux`) and [Claude Code](https://claude.ai/code)
 
 ## Build from source
