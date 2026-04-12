@@ -180,12 +180,10 @@ class StatusBarController: NSObject {
             name: NSWorkspace.didTerminateApplicationNotification, object: nil
         )
 
-        let openTerminals = !CommandLine.arguments.contains("--background")
-
         if projects.isEmpty {
             showFolderPicker()
         } else {
-            startEnabledProjects(thenAttach: openTerminals)
+            startEnabledProjects()
         }
     }
 
@@ -346,47 +344,6 @@ class StatusBarController: NSObject {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
             self?.refreshAllStatusAsync()
-        }
-    }
-
-    func attachAllInTabs() {
-        let alive = projects.filter { isAlive($0) }
-        guard !alive.isEmpty else { return }
-
-        let sessions = alive.map { project in
-            project.sessionName
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // Open first session (creates new Terminal window)
-            self?.runAppleScriptSync("""
-                tell application "Terminal"
-                    activate
-                    do script "\(Config.tmuxPath) attach-session -t \(sessions[0])"
-                end tell
-                """)
-
-            // Open each subsequent session in a new tab
-            for session in sessions.dropFirst() {
-                Thread.sleep(forTimeInterval: 1.0)
-                self?.runAppleScriptSync("""
-                    tell application "System Events" to tell process "Terminal"
-                        keystroke "t" using command down
-                    end tell
-                    """)
-                Thread.sleep(forTimeInterval: 0.5)
-                self?.runAppleScriptSync("""
-                    tell application "Terminal"
-                        do script "\(Config.tmuxPath) attach-session -t \(session)" in front window
-                    end tell
-                    """)
-            }
-
-            DispatchQueue.main.async {
-                self?.refreshAllStatusAsync()
-            }
         }
     }
 
@@ -626,14 +583,10 @@ class StatusBarController: NSObject {
         }
     }
 
-    private func startEnabledProjects(thenAttach: Bool = false) {
+    private func startEnabledProjects() {
         let toStart = projects.filter { $0.enabled && !isAlive($0) && $0.folderExists }
         runBulkAsync(toStart, action: "start", includeDir: true) { [weak self] in
-            self?.refreshAllStatusAsync {
-                if thenAttach {
-                    self?.attachAllInTabs()
-                }
-            }
+            self?.refreshAllStatusAsync()
         }
     }
 
@@ -650,14 +603,6 @@ class StatusBarController: NSObject {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = source.components(separatedBy: "\n").flatMap { ["-e", $0] }
         try? task.run()
-    }
-
-    private func runAppleScriptSync(_ source: String) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = source.components(separatedBy: "\n").flatMap { ["-e", $0] }
-        try? task.run()
-        task.waitUntilExit()
     }
 
     private func loadInstructionsText() -> String {
@@ -678,7 +623,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        controller.attachAllInTabs()
         return false
     }
 }
