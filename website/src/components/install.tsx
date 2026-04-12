@@ -5,10 +5,11 @@ import { useState } from "react";
 const steps = [
   {
     label: "Download",
-    code: "# Download Redeye.app.zip from GitHub and unzip it\n# Move Redeye.app to /Applications",
+    code: "# Download here, unzip it, and move to /Applications",
+    link: "https://github.com/hrosenblume/redeye/releases/latest/download/Redeye.app.zip",
   },
   {
-    label: "Clear quarantine",
+    label: "Go to Terminal and run",
     code: "xattr -cr /Applications/Redeye.app",
   },
   {
@@ -38,15 +39,27 @@ export function Install() {
               {i + 1}. {step.label}
             </div>
             <div className="group relative rounded-lg border border-zinc-800 bg-zinc-900 p-4 font-mono text-sm">
-              <pre className="overflow-x-auto whitespace-pre text-zinc-300">
-                {step.code}
-              </pre>
-              <button
-                onClick={() => copy(step.code, i)}
-                className="absolute right-3 top-3 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:text-white"
-              >
-                {copied === i ? "Copied" : "Copy"}
-              </button>
+              {"link" in step ? (
+                <p className="text-zinc-300">
+                  Download{" "}
+                  <a href={step.link} className="underline hover:text-white">
+                    here
+                  </a>
+                  , unzip it, and move to /Applications
+                </p>
+              ) : (
+                <>
+                  <pre className="overflow-x-auto whitespace-pre text-zinc-300">
+                    {step.code}
+                  </pre>
+                  <button
+                    onClick={() => copy(step.code, i)}
+                    className="absolute right-3 top-3 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:text-white"
+                  >
+                    {copied === i ? "Copied" : "Copy"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ))}
