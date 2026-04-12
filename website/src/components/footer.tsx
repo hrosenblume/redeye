@@ -10,14 +10,6 @@ export function Footer() {
           Hunter Rosenblume
         </a>
       </p>
-      <p className="mt-1">
-        <a
-          href="https://github.com/hrosenblume/redeye"
-          className="text-zinc-400 underline hover:text-white"
-        >
-          View source on GitHub
-        </a>
-      </p>
     </footer>
   );
 }
