@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 
 // MARK: - Configuration
 
@@ -23,6 +24,8 @@ private enum Config {
     static let depCheckDismissedKey = "depCheckDismissed"
     static let searchPaths = "/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
     static let pollInterval: TimeInterval = 30
+    static let permissionPollInterval: TimeInterval = 5
+    static let permissionPromptPatterns = ["[Y/n]", "[y/N]", "Allow", "Deny", "approve", "permission"]
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)
     static let instructionsTextInset = NSSize(width: 16, height: 16)
@@ -73,12 +76,13 @@ private enum StatusIndicator {
 struct Project: Codable, Equatable {
     var path: String
     var enabled: Bool
+    var permissionMode: String?
 
     var name: String {
         (path as NSString).lastPathComponent
     }
 
-    var sessionName: String {
+    var sessionPrefix: String {
         let safe = name.lowercased()
             .replacingOccurrences(of: " ", with: "-")
             .filter { $0.isLetter || $0.isNumber || $0 == "-" }
@@ -435,7 +439,9 @@ private extension NSMenu {
 class StatusBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var sessionStatus: [String: SessionState] = [:]
+    private var pendingPermissions: [String: String] = [:]
     private var pollTimer: Timer?
+    private var permissionPollTimer: Timer?
     private var isUpdating = false
     private var instructionsWindow: NSWindow?
     private var depStatus: DependencyStatus?
@@ -459,10 +465,38 @@ class StatusBarController: NSObject {
         }
     }
 
+    // MARK: - Multi-Session Helpers
+
+    private func sessions(for project: Project) -> [String] {
+        sessionStatus.keys
+            .filter { $0.hasPrefix(project.sessionPrefix + "-") }
+            .sorted()
+    }
+
+    private func aliveSessions(for project: Project) -> [String] {
+        sessions(for: project).filter { sessionStatus[$0]?.isAlive == true }
+    }
+
+    private func nextSessionName(for project: Project) -> String {
+        let existing = sessions(for: project).compactMap { name -> Int? in
+            guard let suffix = name.split(separator: "-").last, let n = Int(suffix) else { return nil }
+            return n
+        }
+        let next = (existing.max() ?? 0) + 1
+        return String(format: "%@-%02d", project.sessionPrefix, next)
+    }
+
+    private func sessionIndex(from name: String) -> String {
+        String(name.split(separator: "-").last ?? "01")
+    }
+
     // MARK: - State Queries
 
     private func state(for project: Project) -> SessionState {
-        sessionStatus[project.sessionName] ?? .stopped
+        let states = sessions(for: project).compactMap { sessionStatus[$0] }
+        if states.contains(.attached) { return .attached }
+        if states.contains(.running) { return .running }
+        return .stopped
     }
 
     private func isAlive(_ project: Project) -> Bool {
@@ -482,14 +516,24 @@ class StatusBarController: NSObject {
         }
     }
 
+    private func indicatorForSession(_ session: String) -> StatusIndicator {
+        switch sessionStatus[session] ?? .stopped {
+        case .attached: return .attached
+        case .running:  return .alive
+        case .stopped:  return .stopped
+        }
+    }
+
     // MARK: - Setup
 
     func setup() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         depStatus = DependencyStatus.check()
+        migrateLegacySessions()
         refreshAllStatus()
         refreshUI()
         startPolling()
+        startPermissionPolling()
 
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(appDidTerminate(_:)),
@@ -617,19 +661,123 @@ class StatusBarController: NSObject {
         sub.addItem(NSMenuItem.separator())
 
         if project.folderExists {
-            let alive = isAlive(project)
-            if alive {
-                sub.addActionItem("Open Session", action: #selector(attachProject(_:)),
-                                  target: self, representedObject: project.path)
+            let projectSessions = sessions(for: project)
+
+            // Per-session items
+            for session in projectSessions {
+                let idx = sessionIndex(from: session)
+                let sessionState = sessionStatus[session] ?? .stopped
+                let indicator = indicatorForSession(session)
+                let info: [String: String] = ["session": session, "path": project.path]
+
+                let sessionSub = NSMenu()
+                if sessionState.isAlive {
+                    sessionSub.addActionItem("Open Session", action: #selector(attachSession(_:)),
+                                             target: self, representedObject: info)
+                    sessionSub.addActionItem("Stop", action: #selector(stopSession(_:)),
+                                             target: self, representedObject: info)
+                    sessionSub.addActionItem("Respawn", action: #selector(respawnSession(_:)),
+                                             target: self, representedObject: info)
+                } else {
+                    sessionSub.addActionItem("Start", action: #selector(startSession(_:)),
+                                             target: self, representedObject: info)
+                    if projectSessions.count > 1 {
+                        sessionSub.addActionItem("Remove", action: #selector(removeSession(_:)),
+                                                 target: self, representedObject: info)
+                    }
+                }
+
+                // Permission prompt indicator
+                if let prompt = pendingPermissions[session] {
+                    sessionSub.addItem(NSMenuItem.separator())
+                    sessionSub.addDisabledItem("\u{26A0} \(prompt)")
+                    sessionSub.addActionItem("Allow", action: #selector(allowPermission(_:)),
+                                             target: self, representedObject: info)
+                    sessionSub.addActionItem("Deny", action: #selector(denyPermission(_:)),
+                                             target: self, representedObject: info)
+                }
+
+                let title = "Session \(idx)"
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.attributedTitle = attributedSessionTitle(idx: idx, indicator: indicator,
+                                                              hasPending: pendingPermissions[session] != nil)
+                item.submenu = sessionSub
+                sub.addItem(item)
             }
-            sub.addActionItem(alive ? "Stop" : "Start", action: #selector(toggleProject(_:)),
+
+            // No sessions yet — show Start
+            if projectSessions.isEmpty {
+                sub.addActionItem("Start", action: #selector(toggleProject(_:)),
+                                  target: self, representedObject: project.path)
+            } else {
+                // Bulk start/stop for project
+                let alive = isAlive(project)
+                sub.addItem(NSMenuItem.separator())
+                if alive {
+                    sub.addActionItem("Stop All Sessions", action: #selector(toggleProject(_:)),
+                                      target: self, representedObject: project.path)
+                }
+            }
+
+            sub.addItem(NSMenuItem.separator())
+            sub.addActionItem("Add Session", action: #selector(addSession(_:)),
                               target: self, representedObject: project.path)
+
+            // Permission mode submenu
+            let permSub = NSMenu()
+            let currentMode = project.permissionMode
+            let modes: [(String, String?)] = [
+                ("Default (ask in terminal)", nil),
+                ("Skip Permissions", "dangerously-skip-permissions"),
+            ]
+            for (label, mode) in modes {
+                let item = NSMenuItem(title: label, action: #selector(setPermissionMode(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = ["path": project.path, "mode": mode ?? ""] as [String: String]
+                item.state = currentMode == mode ? .on : .off
+                permSub.addItem(item)
+            }
+            let permItem = NSMenuItem(title: "Permission Mode", action: nil, keyEquivalent: "")
+            permItem.submenu = permSub
+            sub.addItem(permItem)
         }
 
         sub.addItem(NSMenuItem.separator())
-        sub.addActionItem("Remove", action: #selector(removeProject(_:)),
+        sub.addActionItem("Remove Project", action: #selector(removeProject(_:)),
                           target: self, representedObject: project.path)
         return sub
+    }
+
+    private func attributedSessionTitle(idx: String, indicator: StatusIndicator,
+                                         hasPending: Bool) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        result.append(NSAttributedString(
+            string: indicator.dot,
+            attributes: [.foregroundColor: indicator.dotColor,
+                         .font: NSFont.menuFont(ofSize: 0)]
+        ))
+        let label = "Session \(idx)"
+        result.append(NSAttributedString(
+            string: label,
+            attributes: [.font: indicator == .stopped
+                ? NSFont.menuFont(ofSize: 0)
+                : NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)]
+        ))
+        if hasPending {
+            result.append(NSAttributedString(
+                string: " \u{2014} permission requested",
+                attributes: [.foregroundColor: NSColor.systemOrange,
+                             .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)]
+            ))
+        } else if let suffix = indicator.suffix {
+            result.append(NSAttributedString(
+                string: suffix,
+                attributes: [.foregroundColor: NSColor.secondaryLabelColor,
+                             .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize)]
+            ))
+        }
+        return result
     }
 
     private func buildBulkActions(in menu: NSMenu) {
@@ -649,6 +797,17 @@ class StatusBarController: NSObject {
         return (index, projects[index])
     }
 
+    private func findProjectByPath(_ path: String) -> (Int, Project)? {
+        guard let index = projects.firstIndex(where: { $0.path == path }) else { return nil }
+        return (index, projects[index])
+    }
+
+    private func sessionInfo(from sender: NSMenuItem) -> (session: String, path: String)? {
+        guard let info = sender.representedObject as? [String: String],
+              let session = info["session"], let path = info["path"] else { return nil }
+        return (session, path)
+    }
+
     @objc func toggleProject(_ sender: NSMenuItem) {
         guard !isUpdating else { return }
         isUpdating = true
@@ -657,33 +816,57 @@ class StatusBarController: NSObject {
         let wasAlive = isAlive(project)
 
         var updated = projects
-        if wasAlive {
-            updated[index].enabled = false
-        } else {
-            guard project.folderExists else { isUpdating = false; return }
-            updated[index].enabled = true
-        }
+        updated[index].enabled = !wasAlive
         projects = updated
 
-        sessionStatus[project.sessionName] = wasAlive ? .stopped : .running
-        refreshUI()
-
-        let action = wasAlive ? "stop" : "start"
-        let name = wasAlive ? nil : displayName(for: project)
-        runScriptAsync(action, session: project.sessionName, dir: wasAlive ? nil : project.path,
-                       displayName: name) { [weak self] in
-            guard let self = self else { return }
-            self.checkStatusAsync(session: project.sessionName) { state in
-                self.sessionStatus[project.sessionName] = state
-                self.refreshUI()
-                self.isUpdating = false
+        if wasAlive {
+            // Stop all sessions for this project
+            let allSessions = sessions(for: project)
+            for session in allSessions {
+                sessionStatus[session] = .stopped
+            }
+            refreshUI()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                for session in allSessions {
+                    self?.runScript("stop", session: session)
+                }
+                DispatchQueue.main.async {
+                    self?.refreshAllStatusAsync { self?.isUpdating = false }
+                }
+            }
+        } else {
+            guard project.folderExists else { isUpdating = false; return }
+            let session = nextSessionName(for: project)
+            sessionStatus[session] = .running
+            refreshUI()
+            let dName = displayName(session: session, project: project)
+            runScriptAsync("start", session: session, dir: project.path,
+                           displayName: dName, permissionMode: project.permissionMode) { [weak self] in
+                self?.refreshAllStatusAsync { self?.isUpdating = false }
             }
         }
     }
 
-    @objc func attachProject(_ sender: NSMenuItem) {
+    @objc func addSession(_ sender: NSMenuItem) {
+        guard !isUpdating else { return }
         guard let (_, project) = findProject(from: sender) else { return }
-        let escaped = project.sessionName
+        guard project.folderExists else { return }
+        isUpdating = true
+
+        let session = nextSessionName(for: project)
+        sessionStatus[session] = .running
+        refreshUI()
+
+        let dName = displayName(session: session, project: project)
+        runScriptAsync("start", session: session, dir: project.path,
+                       displayName: dName, permissionMode: project.permissionMode) { [weak self] in
+            self?.refreshAllStatusAsync { self?.isUpdating = false }
+        }
+    }
+
+    @objc func attachSession(_ sender: NSMenuItem) {
+        guard let (session, _) = sessionInfo(from: sender) else { return }
+        let escaped = session
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         runAppleScript("tell application \"Terminal\" to do script \"\(Config.tmuxPath) attach-session -t \(escaped)\"")
@@ -695,27 +878,116 @@ class StatusBarController: NSObject {
         }
     }
 
-    @objc func removeProject(_ sender: NSMenuItem) {
-        guard !isUpdating else { return }
+    @objc func stopSession(_ sender: NSMenuItem) {
+        guard !isUpdating, let (session, _) = sessionInfo(from: sender) else { return }
         isUpdating = true
-        guard let (index, project) = findProject(from: sender) else { isUpdating = false; return }
-
-        let needsStop = isAlive(project)
-        let session = project.sessionName
-
-        var updated = projects
-        updated.remove(at: index)
-        projects = updated
-        sessionStatus.removeValue(forKey: session)
+        sessionStatus[session] = .stopped
+        pendingPermissions.removeValue(forKey: session)
         refreshUI()
+        runScriptAsync("stop", session: session) { [weak self] in
+            self?.refreshAllStatusAsync { self?.isUpdating = false }
+        }
+    }
 
-        if needsStop {
+    @objc func startSession(_ sender: NSMenuItem) {
+        guard !isUpdating, let (session, path) = sessionInfo(from: sender) else { return }
+        guard let (_, project) = findProjectByPath(path) else { return }
+        isUpdating = true
+        sessionStatus[session] = .running
+        refreshUI()
+        let dName = displayName(session: session, project: project)
+        runScriptAsync("start", session: session, dir: path,
+                       displayName: dName, permissionMode: project.permissionMode) { [weak self] in
+            self?.refreshAllStatusAsync { self?.isUpdating = false }
+        }
+    }
+
+    @objc func respawnSession(_ sender: NSMenuItem) {
+        guard !isUpdating, let (session, path) = sessionInfo(from: sender) else { return }
+        guard let (_, project) = findProjectByPath(path) else { return }
+        isUpdating = true
+        sessionStatus[session] = .running
+        pendingPermissions.removeValue(forKey: session)
+        refreshUI()
+        let dName = displayName(session: session, project: project)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runScript("stop", session: session)
+            self?.runScript("start", session: session, dir: path,
+                           displayName: dName, permissionMode: project.permissionMode)
+            DispatchQueue.main.async {
+                self?.refreshAllStatusAsync { self?.isUpdating = false }
+            }
+        }
+    }
+
+    @objc func removeSession(_ sender: NSMenuItem) {
+        guard !isUpdating, let (session, _) = sessionInfo(from: sender) else { return }
+        isUpdating = true
+        let wasAlive = sessionStatus[session]?.isAlive == true
+        sessionStatus.removeValue(forKey: session)
+        pendingPermissions.removeValue(forKey: session)
+        refreshUI()
+        if wasAlive {
             runScriptAsync("stop", session: session) { [weak self] in
                 self?.isUpdating = false
             }
         } else {
             isUpdating = false
         }
+    }
+
+    @objc func removeProject(_ sender: NSMenuItem) {
+        guard !isUpdating else { return }
+        isUpdating = true
+        guard let (index, project) = findProject(from: sender) else { isUpdating = false; return }
+
+        let allSessions = sessions(for: project)
+        let aliveSessions = allSessions.filter { sessionStatus[$0]?.isAlive == true }
+
+        var updated = projects
+        updated.remove(at: index)
+        projects = updated
+        for session in allSessions {
+            sessionStatus.removeValue(forKey: session)
+            pendingPermissions.removeValue(forKey: session)
+        }
+        refreshUI()
+
+        if !aliveSessions.isEmpty {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                for session in aliveSessions { self?.runScript("stop", session: session) }
+                DispatchQueue.main.async { self?.isUpdating = false }
+            }
+        } else {
+            isUpdating = false
+        }
+    }
+
+    // MARK: - Permission Actions
+
+    @objc func allowPermission(_ sender: NSMenuItem) {
+        guard let (session, _) = sessionInfo(from: sender) else { return }
+        pendingPermissions.removeValue(forKey: session)
+        refreshUI()
+        runScriptAsync("send", session: session, dir: "y")
+    }
+
+    @objc func denyPermission(_ sender: NSMenuItem) {
+        guard let (session, _) = sessionInfo(from: sender) else { return }
+        pendingPermissions.removeValue(forKey: session)
+        refreshUI()
+        runScriptAsync("send", session: session, dir: "n")
+    }
+
+    @objc func setPermissionMode(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: String],
+              let path = info["path"],
+              let (index, _) = findProjectByPath(path) else { return }
+        let mode = info["mode"]
+        var updated = projects
+        updated[index].permissionMode = (mode?.isEmpty == true) ? nil : mode
+        projects = updated
+        refreshUI()
     }
 
     @objc func appDidTerminate(_ note: Notification) {
@@ -744,13 +1016,28 @@ class StatusBarController: NSObject {
         guard !isUpdating else { return }
         isUpdating = true
 
-        let (toStart, updated) = bulkUpdateProjects(where: { !isAlive($0) && $0.folderExists },
-                                                     setEnabled: true, optimisticState: .running)
+        var updated = projects
+        var toStart: [(session: String, project: Project)] = []
+        for (index, project) in projects.enumerated() {
+            if !isAlive(project) && project.folderExists {
+                updated[index].enabled = true
+                let session = nextSessionName(for: project)
+                sessionStatus[session] = .running
+                toStart.append((session, project))
+            }
+        }
         projects = updated
         refreshUI()
 
-        runBulkAsync(toStart, action: "start", includeDir: true) { [weak self] in
-            self?.refreshAllStatusAsync { self?.isUpdating = false }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for (session, project) in toStart {
+                let dName = self?.displayName(session: session, project: project)
+                self?.runScript("start", session: session, dir: project.path,
+                               displayName: dName, permissionMode: project.permissionMode)
+            }
+            DispatchQueue.main.async {
+                self?.refreshAllStatusAsync { self?.isUpdating = false }
+            }
         }
     }
 
@@ -758,13 +1045,23 @@ class StatusBarController: NSObject {
         guard !isUpdating else { return }
         isUpdating = true
 
-        let (toStop, updated) = bulkUpdateProjects(where: { isAlive($0) },
-                                                    setEnabled: false, optimisticState: .stopped)
+        var updated = projects
+        let allAlive = sessionStatus.filter { $0.value.isAlive }.map(\.key)
+        for (index, _) in projects.enumerated() {
+            updated[index].enabled = false
+        }
+        for session in allAlive {
+            sessionStatus[session] = .stopped
+        }
+        pendingPermissions.removeAll()
         projects = updated
         refreshUI()
 
-        runBulkAsync(toStop, action: "stop", includeDir: false) { [weak self] in
-            self?.refreshAllStatusAsync { self?.isUpdating = false }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for session in allAlive { self?.runScript("stop", session: session) }
+            DispatchQueue.main.async {
+                self?.refreshAllStatusAsync { self?.isUpdating = false }
+            }
         }
     }
 
@@ -814,6 +1111,8 @@ class StatusBarController: NSObject {
     @objc func quitApp() {
         pollTimer?.invalidate()
         pollTimer = nil
+        permissionPollTimer?.invalidate()
+        permissionPollTimer = nil
         NSApplication.shared.terminate(nil)
     }
 
@@ -841,126 +1140,182 @@ class StatusBarController: NSObject {
         }
         projects = updated
 
-        let toStart = projects.filter { $0.enabled && !isAlive($0) && $0.folderExists }
-        for project in toStart {
-            sessionStatus[project.sessionName] = .running
+        var toStart: [(session: String, project: Project)] = []
+        for project in projects where project.enabled && !isAlive(project) && project.folderExists {
+            let session = nextSessionName(for: project)
+            sessionStatus[session] = .running
+            toStart.append((session, project))
         }
         refreshUI()
 
-        runBulkAsync(toStart, action: "start", includeDir: true) { [weak self] in
-            self?.refreshAllStatusAsync()
-        }
-    }
-
-    // MARK: - Bulk Helpers
-
-    private func bulkUpdateProjects(where predicate: (Project) -> Bool,
-                                     setEnabled: Bool,
-                                     optimisticState: SessionState) -> ([Project], [Project]) {
-        var targets: [Project] = []
-        var updated = projects
-        for (index, project) in projects.enumerated() {
-            if predicate(project) {
-                targets.append(project)
-                updated[index].enabled = setEnabled
-                sessionStatus[project.sessionName] = optimisticState
-            }
-        }
-        return (targets, updated)
-    }
-
-    private func displayName(for project: Project) -> String {
-        let sameName = projects.filter { $0.name == project.name }
-        let index = sameName.firstIndex(where: { $0.path == project.path }) ?? 0
-        return String(format: "redeye-%@-%02d", project.name.lowercased(), index)
-    }
-
-    private func runBulkAsync(_ targets: [Project], action: String, includeDir: Bool,
-                              completion: @escaping () -> Void) {
-        let names = includeDir ? targets.map { displayName(for: $0) } : []
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            for (i, project) in targets.enumerated() {
-                self?.runScript(action, session: project.sessionName,
-                               dir: includeDir ? project.path : nil,
-                               displayName: includeDir ? names[i] : nil)
+            for (session, project) in toStart {
+                let dName = self?.displayName(session: session, project: project)
+                self?.runScript("start", session: session, dir: project.path,
+                               displayName: dName, permissionMode: project.permissionMode)
             }
-            DispatchQueue.main.async { completion() }
+            DispatchQueue.main.async { self?.refreshAllStatusAsync() }
         }
+    }
+
+    // MARK: - Helpers
+
+    private func displayName(session: String, project: Project) -> String {
+        let safe = project.name.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        let idx = sessionIndex(from: session)
+        return "redeye-\(safe)-\(idx)"
     }
 
     // MARK: - Script Interface
 
     private func runScript(_ action: String, session: String, dir: String? = nil,
-                            displayName: String? = nil) {
+                            displayName: String? = nil, permissionMode: String? = nil) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
         var args = [Config.scriptPath, action, session]
         if let dir = dir { args.append(dir) }
         if let displayName = displayName { args.append(displayName) }
+        if let mode = permissionMode { args.append(mode) }
         task.arguments = args
         try? task.run()
         task.waitUntilExit()
     }
 
     private func runScriptAsync(_ action: String, session: String, dir: String? = nil,
-                                displayName: String? = nil, completion: (() -> Void)? = nil) {
+                                displayName: String? = nil, permissionMode: String? = nil,
+                                completion: (() -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.runScript(action, session: session, dir: dir, displayName: displayName)
+            self?.runScript(action, session: session, dir: dir, displayName: displayName,
+                           permissionMode: permissionMode)
             DispatchQueue.main.async { completion?() }
         }
     }
 
-    private func checkStatus(session: String) -> SessionState {
+    private func runScriptOutput(_ action: String, session: String, dir: String? = nil) -> String {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
-        task.arguments = [Config.scriptPath, "status", session]
+        var args = [Config.scriptPath, action, session]
+        if let dir = dir { args.append(dir) }
+        task.arguments = args
         let pipe = Pipe()
         task.standardOutput = pipe
         try? task.run()
         task.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8)?
+        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        switch output {
-        case "running":  return .running
-        case "attached": return .attached
-        default:         return .stopped
-        }
     }
 
-    private func checkStatusAsync(session: String, completion: @escaping (SessionState) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let state = self?.checkStatus(session: session) ?? .stopped
-            DispatchQueue.main.async { completion(state) }
+    // MARK: - Session Discovery
+
+    private func discoverSessions() -> [String: SessionState] {
+        let output = runScriptOutput("list", session: "redeye-")
+        guard !output.isEmpty else { return [:] }
+        var result: [String: SessionState] = [:]
+        for line in output.split(separator: "\n") {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let name = String(parts[0])
+            let attached = Int(parts[1]) ?? 0
+            result[name] = attached > 0 ? .attached : .running
         }
+        return result
     }
 
     private func refreshAllStatus() {
-        for project in projects {
-            sessionStatus[project.sessionName] = checkStatus(session: project.sessionName)
-        }
+        sessionStatus = discoverSessions()
         refreshUI()
     }
 
     private func refreshAllStatusAsync(completion: (() -> Void)? = nil) {
-        let projectList = projects
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var newStatus: [String: SessionState] = [:]
-            for project in projectList {
-                newStatus[project.sessionName] = self?.checkStatus(session: project.sessionName) ?? .stopped
-            }
+            let discovered = self?.discoverSessions() ?? [:]
             DispatchQueue.main.async {
-                self?.sessionStatus = newStatus
+                self?.sessionStatus = discovered
                 self?.refreshUI()
                 completion?()
             }
         }
     }
 
+    // MARK: - Migration
+
+    private func migrateLegacySessions() {
+        for project in projects {
+            let legacy = project.sessionPrefix
+            let output = runScriptOutput("status", session: legacy)
+            if output == "running" || output == "attached" {
+                let newName = legacy + "-01"
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/bin/bash")
+                task.arguments = ["-c", "\(Config.tmuxPath) rename-session -t \"\(legacy)\" \"\(newName)\" 2>/dev/null"]
+                try? task.run()
+                task.waitUntilExit()
+            }
+        }
+    }
+
+    // MARK: - Permission Prompt Detection
+
+    private func checkPermissionPrompts() {
+        let aliveSessions = sessionStatus.filter { $0.value.isAlive }.map(\.key)
+        guard !aliveSessions.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            var changed = false
+            for session in aliveSessions {
+                let output = self.runScriptOutput("capture", session: session)
+                let hasPrompt = Config.permissionPromptPatterns.contains { output.contains($0) }
+                DispatchQueue.main.async {
+                    let wasPending = self.pendingPermissions[session] != nil
+                    if hasPrompt && !wasPending {
+                        let lines = output.split(separator: "\n")
+                        let promptLine = lines.last(where: { line in
+                            Config.permissionPromptPatterns.contains { line.contains($0) }
+                        }).map(String.init) ?? "Permission requested"
+                        self.pendingPermissions[session] = promptLine
+                        self.sendPermissionNotification(session: session, prompt: promptLine)
+                        changed = true
+                    } else if !hasPrompt && wasPending {
+                        self.pendingPermissions.removeValue(forKey: session)
+                        changed = true
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                if changed { self.refreshUI() }
+            }
+        }
+    }
+
+    private func sendPermissionNotification(session: String, prompt: String) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let content = UNMutableNotificationContent()
+        content.title = "Redeye \u{2014} Permission Requested"
+        content.body = "\(session): \(prompt)"
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: "redeye-perm-\(session)",
+                                            content: content, trigger: nil)
+        center.add(request)
+    }
+
     private func startEnabledProjects() {
-        let toStart = projects.filter { $0.enabled && !isAlive($0) && $0.folderExists }
-        runBulkAsync(toStart, action: "start", includeDir: true) { [weak self] in
-            self?.refreshAllStatusAsync()
+        var toStart: [(session: String, project: Project)] = []
+        for project in projects where project.enabled && !isAlive(project) && project.folderExists {
+            let session = nextSessionName(for: project)
+            sessionStatus[session] = .running
+            toStart.append((session, project))
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for (session, project) in toStart {
+                let dName = self?.displayName(session: session, project: project)
+                self?.runScript("start", session: session, dir: project.path,
+                               displayName: dName, permissionMode: project.permissionMode)
+            }
+            DispatchQueue.main.async { self?.refreshAllStatusAsync() }
         }
     }
 
@@ -972,6 +1327,13 @@ class StatusBarController: NSObject {
                 self?.depStatus = newDepStatus
                 self?.refreshUI()
             }
+        }
+    }
+
+    private func startPermissionPolling() {
+        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: Config.permissionPollInterval,
+                                                    repeats: true) { [weak self] _ in
+            self?.checkPermissionPrompts()
         }
     }
 

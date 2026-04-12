@@ -1,7 +1,7 @@
 #!/bin/bash
 # Redeye: Claude Code keepalive manager.
 # Uses detached tmux sessions -- no Terminal.app window.
-# Usage: redeye.sh {start|stop|status} <session_name> [project_dir] [display_name]
+# Usage: redeye.sh {start|stop|status|list|capture|send} <session_name> [project_dir] [display_name] [permission_mode]
 
 # macOS apps launch with a minimal PATH — add common install locations
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
@@ -46,6 +46,10 @@ case "$ACTION" in
     if [ -n "$DISPLAY_NAME" ]; then
       CLAUDE_ARGS="--name \"$DISPLAY_NAME\""
     fi
+    PERMISSION_MODE="${5:-}"
+    if [ -n "$PERMISSION_MODE" ] && [ "$PERMISSION_MODE" != "default" ]; then
+      CLAUDE_ARGS="$CLAUDE_ARGS --$PERMISSION_MODE"
+    fi
     "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR" \
       "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN $CLAUDE_ARGS"
     echo "started"
@@ -73,8 +77,19 @@ case "$ACTION" in
       echo "stopped"
     fi
     ;;
+  list)
+    "$TMUX_BIN" list-sessions -F '#{session_name}:#{session_attached}' 2>/dev/null \
+      | grep "^${SESSION_NAME}"
+    ;;
+  capture)
+    "$TMUX_BIN" capture-pane -t "$SESSION_NAME" -p -S -10 2>/dev/null
+    ;;
+  send)
+    KEYS="${3:-}"
+    "$TMUX_BIN" send-keys -t "$SESSION_NAME" "$KEYS" 2>/dev/null
+    ;;
   *)
-    echo "Usage: $0 {start|stop|status} <session_name> [project_dir]"
+    echo "Usage: $0 {start|stop|status|list|capture|send} <session_name> [args...]"
     exit 1
     ;;
 esac
