@@ -13,7 +13,7 @@ export function Hero() {
           href="https://github.com/hrosenblume/redeye/raw/main/Redeye.app.zip"
           className="rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition-colors hover:bg-zinc-200"
         >
-          Download
+          Download for Mac
         </a>
         <a
           href="#install"
