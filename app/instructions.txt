@@ -3,7 +3,7 @@ Getting Started with Redeye
 
 What is Redeye?
 
-Redeye keeps Claude Code running in the background on your Mac so you can code from anywhere — your phone, a tablet, or the web.
+Redeye keep Claude Code running in the background on your Mac so you can code from anywhere — your phone, a tablet, or the web.
 
 
 Step 1: Add a project

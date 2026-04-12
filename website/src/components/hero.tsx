@@ -6,7 +6,7 @@ export function Hero() {
         Keep your Claude awake
       </h1>
       <p className="mt-6 max-w-xl text-center text-lg leading-8 text-zinc-400">
-        An app for Mac that keeps Claude Code running in the background.
+        An app for Mac that keep Claude Code running in the background.
       </p>
       <div className="mt-10 flex gap-4">
         <a

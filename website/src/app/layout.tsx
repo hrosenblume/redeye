@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Redeye - Keeps your Claude awake",
+  title: "Redeye - Keep your Claude awake",
   description:
-    "A macOS menu bar app that keeps Claude Code sessions alive in the background using tmux.",
+    "A macOS menu bar app that keep Claude Code sessions alive in the background using tmux.",
 };
 
 export default function RootLayout({
