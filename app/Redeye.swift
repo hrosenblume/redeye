@@ -328,17 +328,25 @@ private class UpdateChecker {
         check()
     }
 
-    func check() {
-        guard let url = URL(string: Config.githubReleasesURL) else { return }
+    func check(silent: Bool = true) {
+        guard let url = URL(string: Config.githubReleasesURL) else {
+            if !silent { showErrorAlert() }
+            return
+        }
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 10
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-            guard let self, let data,
+            guard let self else { return }
+
+            guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = json["tag_name"] as? String,
-                  let htmlURL = json["html_url"] as? String else { return }
+                  let htmlURL = json["html_url"] as? String else {
+                if !silent { DispatchQueue.main.async { self.showErrorAlert() } }
+                return
+            }
 
             let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Config.lastUpdateCheckKey)
@@ -348,6 +356,8 @@ private class UpdateChecker {
                 self.releaseURL = htmlURL
                 if self.updateAvailable {
                     self.showUpdateAlert(version: version, url: htmlURL)
+                } else if !silent {
+                    self.showUpToDateAlert()
                 }
             }
         }.resume()
@@ -367,6 +377,26 @@ private class UpdateChecker {
                 NSWorkspace.shared.open(releaseURL)
             }
         }
+    }
+
+    private func showUpToDateAlert() {
+        let alert = NSAlert()
+        alert.messageText = "You\u{2019}re Up to Date"
+        alert.informativeText = "Redeye v\(currentVersion) is the latest version."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    private func showErrorAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Update Check Failed"
+        alert.informativeText = "Could not reach GitHub to check for updates. Please check your connection and try again."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     private func compareVersions(_ a: String, isNewerThan b: String) -> Bool {
@@ -566,6 +596,8 @@ class StatusBarController: NSObject {
         menu.addItem(NSMenuItem.separator())
         menu.addActionItem("Check for Updates\u{2026}", action: #selector(checkForUpdates), target: self)
         menu.addActionItem("Quit Redeye", action: #selector(quitApp), target: self, key: "q")
+        menu.addItem(NSMenuItem.separator())
+        menu.addDisabledItem("v\(updateChecker.currentVersion)")
 
         statusItem.menu = menu
     }
@@ -776,7 +808,7 @@ class StatusBarController: NSObject {
     }
 
     @objc func checkForUpdates() {
-        updateChecker.check()
+        updateChecker.check(silent: false)
     }
 
     @objc func quitApp() {
