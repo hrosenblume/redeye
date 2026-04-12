@@ -18,6 +18,10 @@ private enum Config {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return path.isEmpty ? "/opt/homebrew/bin/tmux" : path
     }()
+    static let depPollInterval: TimeInterval = 2.0
+    static let depPollTimeout: TimeInterval = 120.0
+    static let depCheckDismissedKey = "depCheckDismissed"
+    static let searchPaths = "/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
     static let pollInterval: TimeInterval = 30
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)
@@ -111,6 +115,171 @@ enum SessionState {
     var isAlive: Bool { self == .running || self == .attached }
 }
 
+// MARK: - Dependency Checking
+
+private struct DependencyStatus {
+    var hasHomebrew: Bool
+    var hasTmux: Bool
+    var hasClaude: Bool
+
+    var allPresent: Bool { hasTmux && hasClaude }
+
+    var missingItems: [String] {
+        var items: [String] = []
+        if !hasHomebrew { items.append("Homebrew (macOS package manager)") }
+        if !hasTmux { items.append("tmux (terminal multiplexer)") }
+        if !hasClaude { items.append("Claude Code CLI") }
+        return items
+    }
+
+    static func check() -> DependencyStatus {
+        DependencyStatus(
+            hasHomebrew: shellHas("brew"),
+            hasTmux: shellHas("tmux"),
+            hasClaude: shellHas("claude")
+        )
+    }
+
+    private static func shellHas(_ command: String) -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.arguments = ["-lc",
+            "export PATH=\"$PATH:\(Config.searchPaths)\"; command -v \(command)"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !output.isEmpty && task.terminationStatus == 0
+    }
+}
+
+// MARK: - Dependency Installer
+
+private class DependencyInstallerController {
+    private var pollTimer: Timer?
+    private var pollStartTime: Date?
+    private var onComplete: ((Bool) -> Void)?
+
+    func checkAndPromptIfNeeded(completion: @escaping (Bool) -> Void) {
+        let status = DependencyStatus.check()
+        if status.allPresent {
+            completion(true)
+            return
+        }
+        if UserDefaults.standard.bool(forKey: Config.depCheckDismissedKey) {
+            completion(true)
+            return
+        }
+        showInstallPrompt(status: status, completion: completion)
+    }
+
+    private func showInstallPrompt(status: DependencyStatus, completion: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "Redeye needs a few things installed"
+        alert.informativeText = "The following are missing:\n\n"
+            + status.missingItems.map { "  \u{2022} \($0)" }.joined(separator: "\n")
+            + "\n\nRedeye will open Terminal to install them. You may be asked for your password."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Install Now")
+        alert.addButton(withTitle: "Skip")
+        alert.addButton(withTitle: "Don\u{2019}t Ask Again")
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+
+        switch response {
+        case .alertFirstButtonReturn:
+            runInstallInTerminal(status: status, completion: completion)
+        case .alertThirdButtonReturn:
+            UserDefaults.standard.set(true, forKey: Config.depCheckDismissedKey)
+            completion(true)
+        default:
+            completion(true)
+        }
+    }
+
+    private func runInstallInTerminal(status: DependencyStatus, completion: @escaping (Bool) -> Void) {
+        let script = buildInstallScript(status: status)
+        let escaped = script
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        let appleScript = "tell application \"Terminal\" to do script \"\(escaped)\""
+        task.arguments = appleScript.components(separatedBy: "\n").flatMap { ["-e", $0] }
+        try? task.run()
+
+        onComplete = completion
+        pollStartTime = Date()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: Config.depPollInterval, repeats: true) { [weak self] timer in
+            self?.pollForDependencies(timer: timer)
+        }
+    }
+
+    private func pollForDependencies(timer: Timer) {
+        let status = DependencyStatus.check()
+        let elapsed = Date().timeIntervalSince(pollStartTime ?? Date())
+
+        if status.allPresent {
+            timer.invalidate()
+            pollTimer = nil
+            showAlert(title: "All set!", message: "All dependencies are installed. Redeye is ready to go.")
+            onComplete?(true)
+            onComplete = nil
+        } else if elapsed > Config.depPollTimeout {
+            timer.invalidate()
+            pollTimer = nil
+            showAlert(title: "Some dependencies are still missing",
+                      message: "Still missing:\n\n"
+                        + status.missingItems.map { "  \u{2022} \($0)" }.joined(separator: "\n")
+                        + "\n\nYou can retry from the Redeye menu later.",
+                      style: .warning)
+            onComplete?(true)
+            onComplete = nil
+        }
+    }
+
+    private func showAlert(title: String, message: String, style: NSAlert.Style = .informational) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = style
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    private func buildInstallScript(status: DependencyStatus) -> String {
+        var steps = [
+            "echo '=== Redeye Dependency Installer ==='",
+            "export PATH=\\\"$PATH:\(Config.searchPaths)\\\""
+        ]
+
+        if !status.hasHomebrew {
+            steps.append("echo '>>> Installing Homebrew...'")
+            steps.append("/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\"")
+            steps.append("eval \\\"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)\\\"")
+        }
+
+        if !status.hasTmux {
+            steps.append("echo '>>> Installing tmux...'")
+            steps.append("brew install tmux")
+        }
+
+        if !status.hasClaude {
+            steps.append("echo '>>> Installing Claude Code...'")
+            steps.append("curl -fsSL https://cli.claude.ai/install.sh | sh")
+        }
+
+        steps.append("echo '=== Installation complete! You can close this window. ==='")
+        return steps.joined(separator: " && ")
+    }
+}
+
 // MARK: - NSMenu Helpers
 
 private extension NSMenu {
@@ -137,6 +306,8 @@ class StatusBarController: NSObject {
     private var pollTimer: Timer?
     private var isUpdating = false
     private var instructionsWindow: NSWindow?
+    private var depStatus: DependencyStatus?
+    private let depInstaller = DependencyInstallerController()
 
     // MARK: - Project Persistence
 
@@ -182,6 +353,7 @@ class StatusBarController: NSObject {
 
     func setup() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        depStatus = DependencyStatus.check()
         refreshAllStatus()
         refreshUI()
         startPolling()
@@ -191,6 +363,19 @@ class StatusBarController: NSObject {
             name: NSWorkspace.didTerminateApplicationNotification, object: nil
         )
 
+        if depStatus?.allPresent == false {
+            depInstaller.checkAndPromptIfNeeded { [weak self] _ in
+                guard let self else { return }
+                self.depStatus = DependencyStatus.check()
+                self.refreshUI()
+                self.continueSetup()
+            }
+        } else {
+            continueSetup()
+        }
+    }
+
+    private func continueSetup() {
         if projects.isEmpty {
             showFolderPicker()
         } else {
@@ -261,6 +446,13 @@ class StatusBarController: NSObject {
 
         menu.addActionItem("Add Folder\u{2026}", action: #selector(addFolder), target: self, key: "n")
         menu.addActionItem("Getting Started", action: #selector(showInstructions), target: self)
+
+        if let status = depStatus, !status.allPresent {
+            menu.addItem(NSMenuItem.separator())
+            menu.addDisabledItem("\u{26A0} Missing Dependencies")
+            menu.addActionItem("Install Dependencies\u{2026}", action: #selector(installDependencies), target: self)
+        }
+
         menu.addItem(NSMenuItem.separator())
         menu.addActionItem("Quit Redeye", action: #selector(quitApp), target: self, key: "q")
 
@@ -391,6 +583,13 @@ class StatusBarController: NSObject {
 
     @objc func addFolder() {
         showFolderPicker()
+    }
+
+    @objc func installDependencies() {
+        depInstaller.checkAndPromptIfNeeded { [weak self] _ in
+            self?.depStatus = DependencyStatus.check()
+            self?.refreshUI()
+        }
     }
 
     @objc func startAllProjects() {
