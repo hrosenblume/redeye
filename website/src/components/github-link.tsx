@@ -2,7 +2,7 @@ export function GitHubLink() {
   return (
     <a
       href="https://github.com/hrosenblume/redeye"
-      className="fixed right-5 top-5 text-zinc-500 transition-colors hover:text-white"
+      className="absolute right-5 top-5 text-zinc-500 transition-colors hover:text-white"
       aria-label="View on GitHub"
     >
       <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
