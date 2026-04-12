@@ -4,7 +4,7 @@ Keeps your Claude awake.
 
 A macOS menu bar app that keeps Claude Code sessions alive in the background using `tmux`.
 
-**[Website](https://hrosenblume.github.io/redeye/)**
+[Website](https://hrosenblume.github.io/redeye/)
 
 ## What it does
 
