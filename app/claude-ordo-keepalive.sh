@@ -3,6 +3,9 @@
 # Uses detached tmux sessions -- no Terminal.app window.
 # Usage: redeye.sh {start|stop|status} <session_name> [project_dir]
 
+# macOS apps launch with a minimal PATH — add common install locations
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.claude/local"
+
 CLAUDE_BIN="$(command -v claude 2>/dev/null || echo "")"
 TMUX_BIN="$(command -v tmux 2>/dev/null || echo "")"
 

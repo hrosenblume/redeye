@@ -9,7 +9,7 @@ private enum Config {
     static let tmuxPath: String = {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
-        task.arguments = ["-lc", "command -v tmux"]
+        task.arguments = ["-lc", "export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; command -v tmux"]
         let pipe = Pipe()
         task.standardOutput = pipe
         try? task.run()
