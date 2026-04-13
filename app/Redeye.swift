@@ -29,6 +29,10 @@ private enum Config {
         "[Y/n]", "[y/N]", "Allow", "Deny", "approve", "permission",
         "Would you like to proceed", "auto-accept edits", "manually approve",
     ]
+    // Auto-respond patterns: when detected, Redeye sends the response without asking
+    static let autoResponses: [(pattern: String, keys: [String])] = [
+        ("Context limit reached", ["/compact", "Enter"]),
+    ]
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)
     static let instructionsTextInset = NSSize(width: 16, height: 16)
@@ -443,6 +447,7 @@ class StatusBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var sessionStatus: [String: SessionState] = [:]
     private var pendingPermissions: [String: String] = [:]
+    private var recentAutoResponses: [String: String] = [:]
     private var pollTimer: Timer?
     private var permissionPollTimer: Timer?
     private var isUpdating = false
@@ -1272,6 +1277,24 @@ class StatusBarController: NSObject {
             var changed = false
             for session in aliveSessions {
                 let output = self.runScriptOutput("capture", session: session)
+
+                // Auto-responses: send predefined keys and skip prompt UI
+                if let auto = Config.autoResponses.first(where: { output.contains($0.pattern) }) {
+                    if self.recentAutoResponses[session] != auto.pattern {
+                        DispatchQueue.main.async {
+                            self.recentAutoResponses[session] = auto.pattern
+                        }
+                        for key in auto.keys {
+                            self.runScript("send", session: session, dir: key)
+                        }
+                    }
+                    continue
+                } else {
+                    DispatchQueue.main.async {
+                        self.recentAutoResponses.removeValue(forKey: session)
+                    }
+                }
+
                 let hasPrompt = Config.permissionPromptPatterns.contains { output.contains($0) }
                 DispatchQueue.main.async {
                     let wasPending = self.pendingPermissions[session] != nil
