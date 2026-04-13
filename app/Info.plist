@@ -14,7 +14,7 @@
     <key>CFBundleIconFile</key>
     <string>Redeye</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.5.5</string>
+    <string>1.5.6</string>
     <key>LSUIElement</key>
     <true/>
 </dict>
