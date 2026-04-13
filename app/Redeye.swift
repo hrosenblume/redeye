@@ -621,11 +621,15 @@ class StatusBarController: NSObject {
     }
 
     private func nextSessionName(for project: Project) -> String {
-        let existing = sessions(for: project).compactMap { name -> Int? in
+        // Only count live slots — .stopped entries linger in sessionStatus and
+        // would otherwise cause max()+1 to skip the freed index. Fill the
+        // lowest available slot so gaps don't accumulate forever.
+        let taken = Set(aliveSessions(for: project).compactMap { name -> Int? in
             guard let suffix = name.split(separator: "-").last, let n = Int(suffix) else { return nil }
             return n
-        }
-        let next = (existing.max() ?? 0) + 1
+        })
+        var next = 1
+        while taken.contains(next) { next += 1 }
         return String(format: "%@-%02d", project.sessionPrefix, next)
     }
 
@@ -1019,7 +1023,12 @@ class StatusBarController: NSObject {
         let escaped = session
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-        runAppleScript("tell application \"Terminal\" to do script \"\(Config.tmuxPath) attach-session -t \(escaped)\"")
+        runAppleScript("""
+        tell application "Terminal"
+            activate
+            do script "\(Config.tmuxPath) attach-session -t \(escaped)"
+        end tell
+        """)
         DispatchQueue.main.asyncAfter(deadline: .now() + Config.attachRefreshDelay) { [weak self] in
             self?.refreshAllStatusAsync()
         }
