@@ -951,12 +951,18 @@ class StatusBarController: NSObject {
         let dName = displayName(session: session, project: project)
         runScriptAsync("start", session: session, dir: project.path,
                        displayName: dName, permissionMode: project.permissionMode) { [weak self] in
-            self?.refreshAllStatusAsync { self?.isUpdating = false }
+            guard let self else { return }
+            self.openTerminal(for: session)
+            self.refreshAllStatusAsync { self.isUpdating = false }
         }
     }
 
     @objc func attachSession(_ sender: NSMenuItem) {
         guard let (session, _) = sessionInfo(from: sender) else { return }
+        openTerminal(for: session)
+    }
+
+    private func openTerminal(for session: String) {
         let escaped = session
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
