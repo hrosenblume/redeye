@@ -323,6 +323,9 @@ private class DependencyInstallerController {
 private class UpdateChecker {
     private var latestVersion: String?
     private var assetURL: String?
+    private var progressWindow: NSWindow?
+    private var progressLabel: NSTextField?
+    private var progressBar: NSProgressIndicator?
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -399,21 +402,16 @@ private class UpdateChecker {
             return
         }
 
-        // Show a non-blocking "downloading" indicator
-        let progress = NSAlert()
-        progress.messageText = "Downloading update\u{2026}"
-        progress.informativeText = "Redeye will quit and relaunch when the update is ready."
-        progress.alertStyle = .informational
-        let progressWindow = progress.window
-        NSApp.activate(ignoringOtherApps: true)
-        progressWindow.makeKeyAndOrderFront(nil)
+        showProgressWindow(text: "Downloading update\u{2026}")
 
         URLSession.shared.downloadTask(with: url) { [weak self] tempURL, _, error in
             guard let self else { return }
-            DispatchQueue.main.async { progressWindow.orderOut(nil) }
 
             guard let tempURL, error == nil else {
-                DispatchQueue.main.async { self.showErrorAlert() }
+                DispatchQueue.main.async {
+                    self.hideProgressWindow()
+                    self.showErrorAlert()
+                }
                 return
             }
 
@@ -425,12 +423,67 @@ private class UpdateChecker {
             do {
                 try FileManager.default.moveItem(at: tempURL, to: zipPath)
             } catch {
-                DispatchQueue.main.async { self.showErrorAlert() }
+                DispatchQueue.main.async {
+                    self.hideProgressWindow()
+                    self.showErrorAlert()
+                }
                 return
             }
 
+            DispatchQueue.main.async {
+                self.updateProgressText("Installing\u{2026}")
+            }
             self.runInstaller(zipPath: zipPath.path)
         }.resume()
+    }
+
+    // MARK: - Progress Window
+
+    private func showProgressWindow(text: String) {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 110),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Redeye Update"
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+
+        let container = NSView(frame: window.contentView!.bounds)
+
+        let label = NSTextField(labelWithString: text)
+        label.frame = NSRect(x: 20, y: 60, width: 300, height: 22)
+        label.alignment = .center
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        container.addSubview(label)
+
+        let bar = NSProgressIndicator(frame: NSRect(x: 20, y: 30, width: 300, height: 20))
+        bar.style = .bar
+        bar.isIndeterminate = true
+        bar.startAnimation(nil)
+        container.addSubview(bar)
+
+        window.contentView = container
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+
+        progressWindow = window
+        progressLabel = label
+        progressBar = bar
+    }
+
+    private func updateProgressText(_ text: String) {
+        progressLabel?.stringValue = text
+    }
+
+    private func hideProgressWindow() {
+        progressBar?.stopAnimation(nil)
+        progressWindow?.orderOut(nil)
+        progressWindow = nil
+        progressLabel = nil
+        progressBar = nil
     }
 
     private func runInstaller(zipPath: String) {
