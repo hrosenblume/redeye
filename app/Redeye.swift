@@ -621,6 +621,7 @@ class StatusBarController: NSObject {
         depStatus = DependencyStatus.check()
         migrateLegacySessions()
         refreshAllStatus()
+        tuneAllSessions()
         refreshUI()
         startPolling()
         startPermissionPolling()
@@ -1345,6 +1346,14 @@ class StatusBarController: NSObject {
                 try? task.run()
                 task.waitUntilExit()
             }
+        }
+    }
+
+    // Apply mouse-scroll + larger history settings to every active session.
+    // Idempotent — safe to call on already-tuned sessions.
+    private func tuneAllSessions() {
+        for session in sessionStatus.keys {
+            runScript("tune", session: session)
         }
     }
 
