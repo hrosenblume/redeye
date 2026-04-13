@@ -930,8 +930,8 @@ class StatusBarController: NSObject {
 
     private func buildBulkActions(in menu: NSMenu) {
         guard projects.count > 1 else { return }
-        let runningCount = sessionStatus.values.filter(\.isAlive).count
-        menu.addActionItem("Start All (\(runningCount)/\(projects.count) running)",
+        let runningProjects = projects.filter { isAlive($0) }.count
+        menu.addActionItem("Start all (silent) (\(runningProjects)/\(projects.count) running)",
                            action: #selector(startAllProjects), target: self)
         menu.addActionItem("Stop All", action: #selector(stopAllProjects), target: self)
         menu.addItem(NSMenuItem.separator())
@@ -1057,7 +1057,9 @@ class StatusBarController: NSObject {
         let dName = displayName(session: session, project: project)
         runScriptAsync("start", session: session, dir: path,
                        displayName: dName, permissionMode: project.permissionMode) { [weak self] in
-            self?.refreshAllStatusAsync { self?.isUpdating = false }
+            guard let self else { return }
+            self.openTerminal(for: session)
+            self.refreshAllStatusAsync { self.isUpdating = false }
         }
     }
 
