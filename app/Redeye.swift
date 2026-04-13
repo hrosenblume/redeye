@@ -322,7 +322,7 @@ private class DependencyInstallerController {
 
 private class UpdateChecker {
     private var latestVersion: String?
-    private var releaseURL: String?
+    private var assetURL: String?
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -353,20 +353,25 @@ private class UpdateChecker {
 
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = json["tag_name"] as? String,
-                  let htmlURL = json["html_url"] as? String else {
+                  let tag = json["tag_name"] as? String else {
                 if !silent { DispatchQueue.main.async { self.showErrorAlert() } }
                 return
             }
+
+            // Find the .zip asset's direct download URL
+            let assets = json["assets"] as? [[String: Any]] ?? []
+            let zipURL = assets
+                .first(where: { ($0["name"] as? String)?.hasSuffix(".zip") == true })
+                .flatMap { $0["browser_download_url"] as? String }
 
             let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Config.lastUpdateCheckKey)
 
             DispatchQueue.main.async {
                 self.latestVersion = version
-                self.releaseURL = htmlURL
+                self.assetURL = zipURL
                 if self.updateAvailable {
-                    self.showUpdateAlert(version: version, url: htmlURL)
+                    self.showUpdateAlert(version: version)
                 } else if !silent {
                     self.showUpToDateAlert()
                 }
@@ -374,19 +379,96 @@ private class UpdateChecker {
         }.resume()
     }
 
-    func showUpdateAlert(version: String, url: String) {
+    func showUpdateAlert(version: String) {
         let alert = NSAlert()
         alert.messageText = "Update Available \u{2014} v\(version)"
-        alert.informativeText = "A new version of Redeye is available. You\u{2019}re currently on v\(currentVersion)."
+        alert.informativeText = "A new version of Redeye is available. You\u{2019}re currently on v\(currentVersion).\n\nRedeye will download and install the update, then relaunch."
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Download Update")
+        alert.addButton(withTitle: "Install Update")
         alert.addButton(withTitle: "Skip")
 
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn {
-            if let releaseURL = URL(string: url) {
-                NSWorkspace.shared.open(releaseURL)
+            downloadAndInstall()
+        }
+    }
+
+    private func downloadAndInstall() {
+        guard let urlString = assetURL, let url = URL(string: urlString) else {
+            showErrorAlert()
+            return
+        }
+
+        // Show a non-blocking "downloading" indicator
+        let progress = NSAlert()
+        progress.messageText = "Downloading update\u{2026}"
+        progress.informativeText = "Redeye will quit and relaunch when the update is ready."
+        progress.alertStyle = .informational
+        let progressWindow = progress.window
+        NSApp.activate(ignoringOtherApps: true)
+        progressWindow.makeKeyAndOrderFront(nil)
+
+        URLSession.shared.downloadTask(with: url) { [weak self] tempURL, _, error in
+            guard let self else { return }
+            DispatchQueue.main.async { progressWindow.orderOut(nil) }
+
+            guard let tempURL, error == nil else {
+                DispatchQueue.main.async { self.showErrorAlert() }
+                return
             }
+
+            // Move zip to a stable temp location (URLSession's temp file gets deleted when callback returns)
+            let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent("redeye-update")
+            try? FileManager.default.removeItem(at: stagingDir)
+            try? FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+            let zipPath = stagingDir.appendingPathComponent("Redeye.app.zip")
+            do {
+                try FileManager.default.moveItem(at: tempURL, to: zipPath)
+            } catch {
+                DispatchQueue.main.async { self.showErrorAlert() }
+                return
+            }
+
+            self.runInstaller(zipPath: zipPath.path)
+        }.resume()
+    }
+
+    private func runInstaller(zipPath: String) {
+        // Spawn a detached bash script that:
+        //  1) Waits for Redeye to quit
+        //  2) Removes the old app
+        //  3) Unzips the new one into /Applications
+        //  4) Strips quarantine and relaunches
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let script = """
+        # Wait up to 10s for Redeye (pid \(pid)) to exit
+        for i in $(seq 1 50); do
+          kill -0 \(pid) 2>/dev/null || break
+          sleep 0.2
+        done
+        rm -rf /Applications/Redeye.app
+        /usr/bin/ditto -xk "\(zipPath)" /Applications/
+        xattr -cr /Applications/Redeye.app 2>/dev/null
+        open /Applications/Redeye.app
+        rm -rf "$(dirname "\(zipPath)")"
+        """
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.arguments = ["-c", script]
+        task.standardInput = FileHandle.nullDevice
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+        } catch {
+            DispatchQueue.main.async { self.showErrorAlert() }
+            return
+        }
+
+        // Quit so the installer can replace us
+        DispatchQueue.main.async {
+            NSApp.terminate(nil)
         }
     }
 
