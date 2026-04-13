@@ -52,8 +52,12 @@ case "$ACTION" in
     fi
     "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR" \
       "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN $CLAUDE_ARGS"
-    "$TMUX_BIN" set-option -t "$SESSION_NAME" mouse on 2>/dev/null
+    # Mouse off so Terminal.app handles selection / Cmd-click URLs / copy-paste natively.
+    # terminal-overrides disables tmux's alternate screen so output flows into
+    # Terminal.app's main scrollback (native trackpad scroll shows real history).
+    "$TMUX_BIN" set-option -t "$SESSION_NAME" mouse off 2>/dev/null
     "$TMUX_BIN" set-option -t "$SESSION_NAME" history-limit 50000 2>/dev/null
+    "$TMUX_BIN" set-option -ga terminal-overrides ',xterm*:smcup@:rmcup@' 2>/dev/null
     echo "started"
     ;;
   stop)
@@ -91,8 +95,9 @@ case "$ACTION" in
     "$TMUX_BIN" send-keys -t "$SESSION_NAME" "$KEYS" 2>/dev/null
     ;;
   tune)
-    "$TMUX_BIN" set-option -t "$SESSION_NAME" mouse on 2>/dev/null
+    "$TMUX_BIN" set-option -t "$SESSION_NAME" mouse off 2>/dev/null
     "$TMUX_BIN" set-option -t "$SESSION_NAME" history-limit 50000 2>/dev/null
+    "$TMUX_BIN" set-option -ga terminal-overrides ',xterm*:smcup@:rmcup@' 2>/dev/null
     ;;
   *)
     echo "Usage: $0 {start|stop|status|list|capture|send|tune} <session_name> [args...]"
