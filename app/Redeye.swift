@@ -32,6 +32,7 @@ private enum Config {
     // Auto-respond patterns: when detected, Redeye sends the response without asking
     static let autoResponses: [(pattern: String, keys: [String])] = [
         ("Context limit reached", ["/compact", "Enter"]),
+        ("ExitPlanMode", ["y", "Enter"]),
     ]
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)
