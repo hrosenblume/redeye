@@ -33,6 +33,18 @@ Step 3: Code from anywhere
 Your Mac needs to stay awake and online. Redeye uses caffeinate to prevent sleep while sessions are running.
 
 
+Cross-session control (automatic)
+
+Redeye automatically configures Claude Code so that any
+session can manage your other sessions — starting, stopping,
+and checking on projects without leaving your terminal.
+
+Just ask Claude things like:
+  "What Redeye sessions are running?"
+  "Start a session for my other project"
+  "What's the ordo session doing right now?"
+
+
 Quick reference
 
   ● Green dot          Session is running

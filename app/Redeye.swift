@@ -42,6 +42,8 @@ private enum Config {
     static let githubReleasesURL = "https://api.github.com/repos/hrosenblume/redeye/releases/latest"
     static let updateCheckInterval: TimeInterval = 86400
     static let lastUpdateCheckKey = "lastUpdateCheck"
+    static let mcpServerPath = resourcesDir + "/redeye_server.py"
+    static let mcpConfiguredKey = "mcpConfigured"
 }
 
 private enum Icon {
@@ -136,23 +138,41 @@ private struct DependencyStatus {
     var hasHomebrew: Bool
     var hasTmux: Bool
     var hasClaude: Bool
+    var hasPython3: Bool
+    var hasFastMCP: Bool
 
     var allPresent: Bool { hasTmux && hasClaude }
+    var mcpReady: Bool { hasPython3 && hasFastMCP }
 
     var missingItems: [String] {
         var items: [String] = []
         if !hasHomebrew { items.append("Homebrew (macOS package manager)") }
         if !hasTmux { items.append("tmux (terminal multiplexer)") }
         if !hasClaude { items.append("Claude Code CLI") }
+        if !hasPython3 { items.append("Python 3 (for Claude Code integration)") }
+        else if !hasFastMCP { items.append("MCP support (for Claude Code integration)") }
         return items
     }
 
     static func check() -> DependencyStatus {
-        DependencyStatus(
+        let python = pythonPath()
+        return DependencyStatus(
             hasHomebrew: shellHas("brew"),
             hasTmux: shellHas("tmux"),
-            hasClaude: shellHas("claude")
+            hasClaude: shellHas("claude"),
+            hasPython3: python != nil,
+            hasFastMCP: python != nil && shellRuns([python!, "-c", "import fastmcp"])
         )
+    }
+
+    static func pythonPath() -> String? {
+        for candidate in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"] {
+            if FileManager.default.isExecutableFile(atPath: candidate),
+               shellRuns([candidate, "-c", "import sys; assert sys.version_info >= (3, 10)"]) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private static func shellHas(_ command: String) -> Bool {
@@ -168,6 +188,17 @@ private struct DependencyStatus {
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !output.isEmpty && task.terminationStatus == 0
+    }
+
+    private static func shellRuns(_ args: [String]) -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: args[0])
+        task.arguments = Array(args.dropFirst())
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+        return task.terminationStatus == 0
     }
 }
 
@@ -305,6 +336,20 @@ private class DependencyInstallerController {
             sections.append([
                 "echo '>>> Installing Claude Code...'",
                 "curl -fsSL https://cli.claude.ai/install.sh | sh"
+            ])
+        }
+
+        if !status.hasPython3 {
+            sections.append([
+                "echo '>>> Installing Python 3...'",
+                "brew install python@3.12"
+            ])
+        }
+
+        if !status.hasFastMCP {
+            sections.append([
+                "echo '>>> Installing MCP support...'",
+                "/opt/homebrew/bin/pip3 install --break-system-packages fastmcp"
             ])
         }
 
@@ -709,7 +754,42 @@ class StatusBarController: NSObject {
         } else {
             startEnabledProjects()
         }
+        configureMCP()
         updateChecker.checkIfNeeded()
+    }
+
+    private func configureMCP() {
+        let status = DependencyStatus.check()
+        guard status.mcpReady, let python = DependencyStatus.pythonPath() else { return }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let configURL = home.appendingPathComponent(".claude/.mcp.json")
+        let expectedArgs = [Config.mcpServerPath]
+
+        var config: [String: Any] = [:]
+        if let data = try? Data(contentsOf: configURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            config = json
+        }
+
+        var servers = config["mcpServers"] as? [String: Any] ?? [:]
+
+        if let existing = servers["redeye"] as? [String: Any],
+           existing["command"] as? String == python,
+           existing["args"] as? [String] == expectedArgs {
+            return
+        }
+
+        servers["redeye"] = ["command": python, "args": expectedArgs]
+        config["mcpServers"] = servers
+
+        try? FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(
+            withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: configURL)
+        }
     }
 
     // MARK: - UI
@@ -1527,6 +1607,9 @@ class StatusBarController: NSObject {
             if self?.depStatus?.allPresent != newDepStatus.allPresent {
                 self?.depStatus = newDepStatus
                 self?.refreshUI()
+            }
+            if newDepStatus.mcpReady {
+                self?.configureMCP()
             }
         }
     }
