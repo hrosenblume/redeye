@@ -931,10 +931,20 @@ class StatusBarController: NSObject {
     private func buildBulkActions(in menu: NSMenu) {
         guard projects.count > 1 else { return }
         let runningProjects = projects.filter { isAlive($0) }.count
-        let suffix = runningProjects == 0 ? "(silent)" : "(\(runningProjects)/\(projects.count) running)"
-        menu.addActionItem("Start all \(suffix)",
-                           action: #selector(startAllProjects), target: self)
-        menu.addActionItem("Stop All", action: #selector(stopAllProjects), target: self)
+        let allRunning = runningProjects == projects.count
+        let noneRunning = runningProjects == 0
+        let suffix = noneRunning ? "(silent)" : "(\(runningProjects)/\(projects.count) running)"
+        if allRunning {
+            menu.addDisabledItem("Start all \(suffix)")
+        } else {
+            menu.addActionItem("Start all \(suffix)",
+                               action: #selector(startAllProjects), target: self)
+        }
+        if noneRunning {
+            menu.addDisabledItem("Stop All")
+        } else {
+            menu.addActionItem("Stop All", action: #selector(stopAllProjects), target: self)
+        }
         menu.addItem(NSMenuItem.separator())
     }
 
