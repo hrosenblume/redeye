@@ -624,7 +624,7 @@ private extension NSMenu {
 
 // MARK: - Status Bar Controller
 
-class StatusBarController: NSObject {
+class StatusBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var sessionStatus: [String: SessionState] = [:]
     private var pendingPermissions: [String: String] = [:]
@@ -632,6 +632,7 @@ class StatusBarController: NSObject {
     private var pollTimer: Timer?
     private var permissionPollTimer: Timer?
     private var isUpdating = false
+    private var menuIsOpen = false
     private var instructionsWindow: NSWindow?
     private var depStatus: DependencyStatus?
     private let depInstaller = DependencyInstallerController()
@@ -796,7 +797,14 @@ class StatusBarController: NSObject {
 
     private func refreshUI() {
         updateIcon()
+        guard !menuIsOpen else { return }
         buildMenu()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
+    func menuDidClose(_ menu: NSMenu) {
+        menuIsOpen = false
+        refreshUI()
     }
 
     private func updateIcon() {
@@ -872,6 +880,7 @@ class StatusBarController: NSObject {
         menu.addItem(NSMenuItem.separator())
         menu.addDisabledItem("v\(updateChecker.currentVersion)")
 
+        menu.delegate = self
         statusItem.menu = menu
     }
 
@@ -1548,14 +1557,22 @@ class StatusBarController: NSObject {
                     }
                 }
 
-                let hasPrompt = Config.permissionPromptPatterns.contains { output.contains($0) }
+                // Strip non-printable/box-drawing chars — tmux capture includes
+                // Claude Code's TUI decorations that render blank in NSMenu.
+                let cleaned = output.unicodeScalars.filter {
+                    $0.isASCII || $0.properties.isAlphabetic || $0.properties.isWhitespace
+                }.map { Character($0) }.map(String.init).joined()
+
+                let hasPrompt = Config.permissionPromptPatterns.contains { cleaned.contains($0) }
                 DispatchQueue.main.async {
                     let wasPending = self.pendingPermissions[session] != nil
                     if hasPrompt && !wasPending {
-                        let lines = output.split(separator: "\n")
+                        let lines = cleaned.split(separator: "\n")
                         let promptLine = lines.last(where: { line in
                             Config.permissionPromptPatterns.contains { line.contains($0) }
-                        }).map(String.init) ?? "Permission requested"
+                        }).map {
+                            String($0).trimmingCharacters(in: .whitespaces)
+                        } ?? "Permission requested"
                         self.pendingPermissions[session] = promptLine
                         self.sendPermissionNotification(session: session, prompt: promptLine)
                         changed = true
