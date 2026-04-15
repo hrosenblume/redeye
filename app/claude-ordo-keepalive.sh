@@ -76,7 +76,7 @@ Your tools: redeye_list_projects (show configured projects), redeye_list_session
 
 Typical usage: list projects to see what is available, start/stop sessions, check on a session's output, or send commands to a running session. Always call your tools to answer questions -- do not guess or assume state. Keep responses short and direct."
     "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR" \
-      "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN --name redeye --tools \"\" --allowedTools \"mcp__redeye__*\" --remote-control --append-system-prompt \"$SYSTEM_PROMPT\""
+      "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN --name redeye --disallowedTools 'Bash,Read,Write,Edit,Glob,Grep,Agent,WebFetch,WebSearch,NotebookEdit,TodoWrite' --mcp-config $HOME/.claude/.mcp.json --remote-control --append-system-prompt \"$SYSTEM_PROMPT\""
     "$TMUX_BIN" set-option -t "$SESSION_NAME" mouse off 2>/dev/null
     "$TMUX_BIN" set-option -t "$SESSION_NAME" history-limit 50000 2>/dev/null
     "$TMUX_BIN" set-option -ga terminal-overrides ',xterm*:smcup@:rmcup@' 2>/dev/null
