@@ -72,7 +72,7 @@ case "$ACTION" in
     fi
     SYSTEM_PROMPT="You are the Redeye meta-session, a persistent Claude Code instance that manages other Claude Code sessions. You can ONLY use Redeye MCP tools (redeye_list_projects, redeye_list_sessions, redeye_start_session, redeye_stop_session, redeye_capture_output, redeye_send_keys). You cannot edit files, run bash commands, or do general coding. Your purpose is to orchestrate and monitor sessions when asked."
     "$TMUX_BIN" new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR" \
-      "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN --name redeye --tools \"\" --allowedTools \"mcp__redeye__*\" --dangerously-skip-permissions --append-system-prompt \"$SYSTEM_PROMPT\""
+      "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; caffeinate -is $CLAUDE_BIN --name redeye --tools \"\" --allowedTools \"mcp__redeye__*\" --remote-control --append-system-prompt \"$SYSTEM_PROMPT\""
     "$TMUX_BIN" set-option -t "$SESSION_NAME" mouse off 2>/dev/null
     "$TMUX_BIN" set-option -t "$SESSION_NAME" history-limit 50000 2>/dev/null
     "$TMUX_BIN" set-option -ga terminal-overrides ',xterm*:smcup@:rmcup@' 2>/dev/null
