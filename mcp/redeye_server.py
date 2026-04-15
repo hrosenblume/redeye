@@ -172,6 +172,8 @@ def redeye_stop_session(session_name: str) -> dict:
     Args:
         session_name: The tmux session name (e.g. redeye-myproject-a1b2c3-01).
     """
+    if session_name == "redeye-meta":
+        return {"error": "Cannot stop the redeye meta-session"}
     result = _run_script("stop", session_name)
     return {"session_name": session_name, "result": result}
 

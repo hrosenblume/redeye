@@ -44,6 +44,9 @@ private enum Config {
     static let lastUpdateCheckKey = "lastUpdateCheck"
     static let mcpServerPath = resourcesDir + "/redeye_server.py"
     static let mcpConfiguredKey = "mcpConfigured"
+    static let metaSessionName = "redeye-meta"
+    static let metaDisplayName = "redeye"
+    static let metaWorkingDir = FileManager.default.homeDirectoryForCurrentUser.path
 }
 
 private enum Icon {
@@ -756,6 +759,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
             startEnabledProjects()
         }
         configureMCP()
+        startMetaSession()
         updateChecker.checkIfNeeded()
     }
 
@@ -852,6 +856,9 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     private func buildMenu() {
         let menu = NSMenu()
+
+        buildMetaSessionItem(in: menu)
+        menu.addItem(NSMenuItem.separator())
 
         if projects.isEmpty {
             menu.addDisabledItem("No projects configured")
@@ -1038,6 +1045,38 @@ class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
     }
 
+    private func buildMetaSessionItem(in menu: NSMenu) {
+        let isAlive = sessionStatus[Config.metaSessionName]?.isAlive == true
+        let indicator: StatusIndicator = isAlive ? .alive : .stopped
+
+        let item = NSMenuItem(title: Config.metaDisplayName, action: nil, keyEquivalent: "")
+        let title = NSMutableAttributedString()
+        title.append(NSAttributedString(
+            string: indicator.dot,
+            attributes: [.foregroundColor: indicator.dotColor,
+                         .font: NSFont.menuFont(ofSize: 0)]
+        ))
+        title.append(NSAttributedString(
+            string: Config.metaDisplayName,
+            attributes: [.font: isAlive
+                ? NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+                : NSFont.menuFont(ofSize: 0)]
+        ))
+        item.attributedTitle = title
+
+        let sub = NSMenu()
+        sub.addDisabledItem("Meta-session (MCP orchestrator)")
+        sub.addItem(NSMenuItem.separator())
+        if isAlive {
+            let info: [String: String] = ["session": Config.metaSessionName,
+                                          "path": Config.metaWorkingDir]
+            sub.addActionItem("Open Session", action: #selector(attachSession(_:)),
+                             target: self, representedObject: info)
+        }
+        item.submenu = sub
+        menu.addItem(item)
+    }
+
     // MARK: - Actions
 
     private func findProject(from sender: NSMenuItem) -> (Int, Project)? {
@@ -1198,6 +1237,14 @@ class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    private func startMetaSession() {
+        guard sessionStatus[Config.metaSessionName]?.isAlive != true else { return }
+        sessionStatus[Config.metaSessionName] = .running
+        refreshUI()
+        runScriptAsync("start-meta", session: Config.metaSessionName,
+                       dir: Config.metaWorkingDir)
+    }
+
     @objc func removeProject(_ sender: NSMenuItem) {
         guard !isUpdating else { return }
         isUpdating = true
@@ -1310,7 +1357,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
         isUpdating = true
 
         var updated = projects
-        let allAlive = sessionStatus.filter { $0.value.isAlive }.map(\.key)
+        let allAlive = sessionStatus.filter { $0.value.isAlive && $0.key != Config.metaSessionName }.map(\.key)
         for (index, _) in projects.enumerated() {
             updated[index].enabled = false
         }
@@ -1620,6 +1667,9 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private func startPolling() {
         pollTimer = Timer.scheduledTimer(withTimeInterval: Config.pollInterval, repeats: true) { [weak self] _ in
             self?.refreshAllStatusAsync()
+            if self?.sessionStatus[Config.metaSessionName]?.isAlive != true {
+                self?.startMetaSession()
+            }
             let newDepStatus = DependencyStatus.check()
             if self?.depStatus?.allPresent != newDepStatus.allPresent {
                 self?.depStatus = newDepStatus
