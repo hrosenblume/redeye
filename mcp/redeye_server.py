@@ -44,6 +44,17 @@ def _display_name(path: str, session_name: str) -> str:
     return f"redeye-{safe}-{idx}"
 
 
+def _resolve_display_name(session_name: str, projects: list[dict]) -> str:
+    """Friendly name for any known session; falls back to raw name if unknown."""
+    if session_name == "redeye-meta":
+        return "redeye"
+    for p in projects:
+        prefix = _session_prefix(p["path"])
+        if session_name.startswith(prefix + "-"):
+            return _display_name(p["path"], session_name)
+    return session_name
+
+
 def _read_projects() -> list[dict]:
     """Read the project list from Redeye's UserDefaults."""
     result = subprocess.run(
@@ -127,7 +138,14 @@ def redeye_list_projects() -> list[dict]:
 
 @mcp.tool()
 def redeye_list_sessions(project_path: Optional[str] = None) -> list[dict]:
-    """List running Redeye sessions. Optionally filter by project path."""
+    """List running Redeye sessions. Optionally filter by project path.
+
+    Each entry has:
+      - session_name: the tmux session name; pass this to stop/capture/send tools
+      - display_name: friendly name; prefer this when showing sessions to users
+      - status: running | attached | stopped
+    """
+    projects = _read_projects()
     if project_path:
         prefix = _session_prefix(project_path)
     else:
@@ -136,6 +154,7 @@ def redeye_list_sessions(project_path: Optional[str] = None) -> list[dict]:
     # Refine status with per-session check (list only gives attached count)
     for s in sessions:
         s["status"] = _session_status(s["session_name"])
+        s["display_name"] = _resolve_display_name(s["session_name"], projects)
     return sessions
 
 
