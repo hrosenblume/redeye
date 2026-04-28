@@ -47,6 +47,10 @@ private enum Config {
     static let metaSessionName = "redeye-meta"
     static let metaDisplayName = "redeye"
     static let metaWorkingDir = FileManager.default.homeDirectoryForCurrentUser.path
+    // Hang detection: if meta's pane output is byte-identical for this many
+    // consecutive polls AND a "working" marker is on screen, respawn it.
+    static let metaHangPolls = 10
+    static let metaWorkingMarkers = ["esc to interrupt"]
 }
 
 private enum Icon {
@@ -634,6 +638,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private var recentAutoResponses: [String: String] = [:]
     private var pollTimer: Timer?
     private var permissionPollTimer: Timer?
+    private var metaCaptureHash: Int = 0
+    private var metaStaleCount: Int = 0
     private var isUpdating = false
     private var menuIsOpen = false
     private var instructionsWindow: NSWindow?
@@ -1604,11 +1610,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
                     }
                 }
 
-                // Strip non-printable/box-drawing chars — tmux capture includes
-                // Claude Code's TUI decorations that render blank in NSMenu.
-                let cleaned = output.unicodeScalars.filter {
-                    $0.isASCII || $0.properties.isAlphabetic || $0.properties.isWhitespace
-                }.map { Character($0) }.map(String.init).joined()
+                let cleaned = sanitizePane(output)
 
                 let hasPrompt = Config.permissionPromptPatterns.contains { cleaned.contains($0) }
                 DispatchQueue.main.async {
@@ -1647,6 +1649,72 @@ class StatusBarController: NSObject, NSMenuDelegate {
         center.add(request)
     }
 
+    // Strip non-printable/box-drawing chars — tmux capture includes
+    // Claude Code's TUI decorations that render blank in NSMenu.
+    private func sanitizePane(_ raw: String) -> String {
+        raw.unicodeScalars.filter {
+            $0.isASCII || $0.properties.isAlphabetic || $0.properties.isWhitespace
+        }.map { Character($0) }.map(String.init).joined()
+    }
+
+    // MARK: - Meta-Session Health
+
+    // Respawns redeye-meta if its pane has been frozen with a "working"
+    // indicator on screen for Config.metaHangPolls consecutive polls.
+    // Idle meta (no working marker) is left alone.
+    private func checkMetaHealth() {
+        guard sessionStatus[Config.metaSessionName]?.isAlive == true else {
+            metaStaleCount = 0
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let cleaned = self.sanitizePane(self.runScriptOutput("capture",
+                                                                  session: Config.metaSessionName))
+            DispatchQueue.main.async {
+                let hash = cleaned.hashValue
+                if hash == self.metaCaptureHash {
+                    self.metaStaleCount += 1
+                } else {
+                    self.metaCaptureHash = hash
+                    self.metaStaleCount = 0
+                }
+                let working = Config.metaWorkingMarkers.contains { cleaned.contains($0) }
+                if self.metaStaleCount >= Config.metaHangPolls && working {
+                    self.metaStaleCount = 0
+                    self.respawnMetaSession()
+                }
+            }
+        }
+    }
+
+    private func respawnMetaSession() {
+        sessionStatus[Config.metaSessionName] = .stopped
+        refreshUI()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.runScript("stop", session: Config.metaSessionName)
+            self?.runScript("start-meta", session: Config.metaSessionName,
+                           dir: Config.metaWorkingDir)
+            DispatchQueue.main.async {
+                self?.metaCaptureHash = 0
+                self?.refreshAllStatusAsync()
+                self?.sendMetaRespawnNotification()
+            }
+        }
+    }
+
+    private func sendMetaRespawnNotification() {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let content = UNMutableNotificationContent()
+        content.title = "Redeye \u{2014} Meta-Session Respawned"
+        content.body = "Detected a hang and restarted the meta-session."
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: "redeye-meta-respawn",
+                                            content: content, trigger: nil)
+        center.add(request)
+    }
+
     private func startEnabledProjects() {
         var toStart: [(session: String, project: Project)] = []
         for project in projects where project.enabled && !isAlive(project) && project.folderExists {
@@ -1669,6 +1737,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
             self?.refreshAllStatusAsync()
             if self?.sessionStatus[Config.metaSessionName]?.isAlive != true {
                 self?.startMetaSession()
+            } else {
+                self?.checkMetaHealth()
             }
             let newDepStatus = DependencyStatus.check()
             if self?.depStatus?.allPresent != newDepStatus.allPresent {
