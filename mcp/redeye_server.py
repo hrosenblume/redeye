@@ -71,6 +71,18 @@ def _read_projects() -> list[dict]:
     return json.loads(data)
 
 
+def _write_projects(projects: list[dict]) -> None:
+    """Write the project list back to Redeye's UserDefaults.
+
+    Stored as JSON-encoded Data to match the Swift app's JSONEncoder format.
+    """
+    payload = json.dumps(projects, separators=(",", ":")).encode("utf-8")
+    subprocess.run(
+        ["defaults", "write", BUNDLE_ID, "projects", "-data", payload.hex()],
+        check=True, timeout=TIMEOUT,
+    )
+
+
 def _list_tmux_sessions(prefix: str) -> list[dict]:
     """List tmux sessions matching a prefix, with status."""
     raw = _run_script("list", prefix)
@@ -111,8 +123,9 @@ mcp = FastMCP(
     name="redeye",
     instructions=(
         "Redeye manages Claude Code tmux sessions in the background. "
-        "Use these tools to list projects, start/stop sessions, read output, "
-        "and send input — all without touching the Redeye menu bar."
+        "Use these tools to add project folders, list projects, start/stop "
+        "sessions, read output, and send input — all without touching the "
+        "Redeye menu bar."
     ),
 )
 
@@ -158,17 +171,8 @@ def redeye_list_sessions(project_path: Optional[str] = None) -> list[dict]:
     return sessions
 
 
-@mcp.tool()
-def redeye_start_session(
-    project_path: str,
-    permission_mode: Optional[str] = None,
-) -> dict:
-    """Start a new Claude Code session for a project.
-
-    Args:
-        project_path: Full path to the project directory.
-        permission_mode: Optional. "dangerously-skip-permissions" to skip, or omit for default.
-    """
+def _start_session(project_path: str, permission_mode: Optional[str]) -> dict:
+    """Start a tmux session for a project. Returns {session_name, result} or {error}."""
     if not os.path.isdir(project_path):
         return {"error": f"directory does not exist: {project_path}"}
 
@@ -182,6 +186,67 @@ def redeye_start_session(
 
     result = _run_script("start", session, *args)
     return {"session_name": session, "result": result}
+
+
+@mcp.tool()
+def redeye_start_session(
+    project_path: str,
+    permission_mode: Optional[str] = None,
+) -> dict:
+    """Start a new Claude Code session for a project.
+
+    Args:
+        project_path: Full path to the project directory.
+        permission_mode: Optional. "dangerously-skip-permissions" to skip, or omit for default.
+    """
+    return _start_session(project_path, permission_mode)
+
+
+@mcp.tool()
+def redeye_add_project(
+    project_path: str,
+    permission_mode: Optional[str] = None,
+    start: bool = True,
+) -> dict:
+    """Register a folder with Redeye and (optionally) start a session for it.
+
+    Idempotent: re-adding an existing path is a no-op aside from updating
+    permission_mode if explicitly provided.
+
+    Args:
+        project_path: Full path to the project directory.
+        permission_mode: Optional. "dangerously-skip-permissions" or omit for default.
+        start: If True (default), immediately start a session.
+    """
+    if not os.path.isdir(project_path):
+        return {"error": f"directory does not exist: {project_path}"}
+
+    resolved = os.path.realpath(project_path)
+    projects = _read_projects()
+    existing = next((p for p in projects if p["path"] == resolved), None)
+
+    if existing is None:
+        entry: dict = {"path": resolved, "enabled": True}
+        if permission_mode and permission_mode != "default":
+            entry["permissionMode"] = permission_mode
+        projects.append(entry)
+        _write_projects(projects)
+        added = True
+    else:
+        added = False
+        if permission_mode is not None:
+            mode = None if permission_mode == "default" else permission_mode
+            if existing.get("permissionMode") != mode:
+                if mode is None:
+                    existing.pop("permissionMode", None)
+                else:
+                    existing["permissionMode"] = mode
+                _write_projects(projects)
+
+    response: dict = {"path": resolved, "added": added}
+    if start:
+        response.update(_start_session(resolved, permission_mode))
+    return response
 
 
 @mcp.tool()
