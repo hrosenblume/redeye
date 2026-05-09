@@ -33,6 +33,8 @@ private enum Config {
     static let autoResponses: [(pattern: String, keys: [String])] = [
         ("Context limit reached", ["/compact", "Enter"]),
         ("ExitPlanMode", ["y", "Enter"]),
+        // Default option ("Yes, proceed") is highlighted, so Enter accepts.
+        ("Do you trust the files in this folder", ["Enter"]),
     ]
     static let attachRefreshDelay: TimeInterval = 2.0
     static let instructionsWindowSize = NSSize(width: 520, height: 520)
